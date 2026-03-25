@@ -1,8 +1,8 @@
 // ============================================================
-// API Layer — Backend communication (http://127.0.0.1:8000)
+// API Layer — Backend communication 
 // ============================================================
 
-const BASE_URL = "http://127.0.0.1:8000";
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function analyzePortfolio(data: any) {
   const res = await fetch(`${BASE_URL}/analyze_portfolio`, {
