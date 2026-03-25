@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from math import sqrt
 from typing import List
 
@@ -12,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backend.ai_agent import generate_portfolio_swot
-from backend.data_fetcher import get_current_price, get_historical_returns
+from backend.data_fetcher import get_current_price, get_historical_returns, normalize_ticker
 from backend.diversification import calculate_diversification
 from backend.portfolio_engine import calculate_portfolio_score
 from backend.recommendation_engine import generate_portfolio_recommendations
@@ -27,18 +28,6 @@ from backend.risk_metrics import (
 )
 from backend.sector_analysis import calculate_sector_exposure, infer_asset_class
 from backend.simulation import simulate_portfolio_monte_carlo
-
-
-# Common NSE input aliases/typos normalized to canonical symbols.
-NSE_TICKER_ALIASES = {
-	"HUL": "HINDUNILVR",
-	"HDFC": "HDFCBANK",
-	"ICICBANK": "ICICIBANK",
-	"INFOSYS": "INFY",
-	"KOTAK": "KOTAKBANK",
-	"RELIANCEIND": "RELIANCE",
-	"MARICOIND": "MARICO",
-}
 
 
 class AssetInput(BaseModel):
@@ -95,10 +84,11 @@ def health() -> dict[str, str]:
 @app.post("/analyser_portfolio/")
 def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	"""Analyze a portfolio and return diversification, score, risk, and SWOT."""
-	quantity_map = {
-		_normalize_input_ticker(asset.ticker): float(asset.quantity)
-		for asset in payload.assets
-	}
+	raw_tickers = [asset.ticker for asset in payload.assets]
+	normalized_tickers = _normalize_tickers_parallel(raw_tickers)
+	quantity_map: dict[str, float] = {}
+	for ticker, asset in zip(normalized_tickers, payload.assets):
+		quantity_map[ticker] = quantity_map.get(ticker, 0.0) + float(asset.quantity)
 	data_warnings: list[str] = []
 	fetched_data = _fetch_current_prices_for_tickers(list(quantity_map.keys()), data_warnings)
 
@@ -406,18 +396,26 @@ def _build_asset_entries(assets: List[AssetInput]) -> list[dict[str, float | str
 		raise ValueError("assets must not be empty")
 
 	raw_quantities: list[float] = []
-	tickers: list[str] = []
+	raw_tickers: list[str] = []
 
 	for asset in assets:
-		ticker = _normalize_input_ticker(asset.ticker)
+		ticker = asset.ticker.strip().upper()
 		if not ticker:
 			raise ValueError("asset ticker must be non-empty")
 		quantity = float(asset.quantity)
 		if quantity < 0:
 			raise ValueError("asset quantity must be non-negative")
 
-		tickers.append(ticker)
+		raw_tickers.append(ticker)
 		raw_quantities.append(quantity)
+
+	normalized_tickers = _normalize_tickers_parallel(raw_tickers)
+	aggregated_quantities: dict[str, float] = {}
+	for ticker, quantity in zip(normalized_tickers, raw_quantities):
+		aggregated_quantities[ticker] = aggregated_quantities.get(ticker, 0.0) + quantity
+
+	tickers = list(aggregated_quantities.keys())
+	raw_quantities = list(aggregated_quantities.values())
 
 	if not raw_quantities or sum(raw_quantities) <= 0:
 		raise ValueError("total portfolio quantity must be greater than 0")
@@ -439,7 +437,7 @@ def _build_rebalance_asset_entries(
 		raise ValueError("assets must not be empty")
 
 	raw_weights: list[float] = []
-	tickers: list[str] = []
+	raw_tickers: list[str] = []
 
 	for asset in assets:
 		ticker = asset.ticker.strip().upper()
@@ -450,8 +448,16 @@ def _build_rebalance_asset_entries(
 		if weight < 0:
 			raise ValueError("asset weights must be non-negative")
 
-		tickers.append(ticker)
+		raw_tickers.append(ticker)
 		raw_weights.append(weight)
+
+	normalized_tickers = _normalize_tickers_parallel(raw_tickers)
+	aggregated_weights: dict[str, float] = {}
+	for ticker, weight in zip(normalized_tickers, raw_weights):
+		aggregated_weights[ticker] = aggregated_weights.get(ticker, 0.0) + weight
+
+	tickers = list(aggregated_weights.keys())
+	raw_weights = list(aggregated_weights.values())
 
 	if not raw_weights or sum(raw_weights) <= 0:
 		raise ValueError("total portfolio weight must be greater than 0")
@@ -466,17 +472,20 @@ def _build_rebalance_asset_entries(
 
 
 def _normalize_input_ticker(raw_ticker: str) -> str:
-	"""Normalize ticker strings and map common NSE aliases to canonical symbols."""
+	"""Normalize ticker string with smart US/NSE/BSE fallback resolution."""
 	clean = raw_ticker.strip().upper()
 	if not clean:
 		return clean
+	return normalize_ticker(clean)
 
-	if "." in clean:
-		base, suffix = clean.split(".", 1)
-		mapped_base = NSE_TICKER_ALIASES.get(base, base)
-		return f"{mapped_base}.{suffix}"
 
-	return NSE_TICKER_ALIASES.get(clean, clean)
+def _normalize_tickers_parallel(raw_tickers: List[str]) -> list[str]:
+	"""Resolve ticker symbols concurrently to reduce normalization latency."""
+	if not raw_tickers:
+		return []
+
+	with ThreadPoolExecutor(max_workers=10) as executor:
+		return list(executor.map(_normalize_input_ticker, raw_tickers))
 
 
 def _build_asset_class_exposure(

@@ -3,9 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 
 import pandas as pd
 import yfinance as yf
+
+
+TICKER_ALIASES = {
+	"HUL": "HINDUNILVR",
+	"HDFC": "HDFCBANK",
+	"ICICBANK": "ICICIBANK",
+	"INFOSYS": "INFY",
+	"KOTAK": "KOTAKBANK",
+	"RELIANCEIND": "RELIANCE",
+	"MARICOIND": "MARICO",
+}
 
 
 def get_current_price(ticker: str) -> pd.DataFrame:
@@ -89,6 +101,53 @@ def get_historical_returns(ticker: str) -> pd.DataFrame:
 	df = df.rename(columns={df.columns[0]: "date"})
 	df.insert(1, "ticker", symbol)
 	return df[["date", "ticker", "close", "daily_return"]]
+
+
+@lru_cache(maxsize=2048)
+def normalize_ticker(ticker: str) -> str:
+	"""Resolve a user-provided ticker to the most likely exchange symbol.
+
+	Resolution order:
+	1. Return as-is when ticker already has an exchange suffix.
+	2. Check configured aliases.
+	3. Validate base ticker as-is (commonly US symbols).
+	4. Fallback to NSE (.NS), then BSE (.BO).
+	"""
+	clean = _validate_ticker(ticker)
+	if "." in clean:
+		return clean
+
+	mapped = TICKER_ALIASES.get(clean, clean)
+	prefer_nse = mapped in TICKER_ALIASES.values() or clean in TICKER_ALIASES
+	as_is_price = _ticker_has_price(mapped)
+
+	ns_ticker = f"{mapped}.NS"
+	ns_price = _ticker_has_price(ns_ticker)
+	if ns_price and (prefer_nse or not as_is_price):
+		return ns_ticker
+
+	if as_is_price:
+		return mapped
+
+	bo_ticker = f"{mapped}.BO"
+	if _ticker_has_price(bo_ticker):
+		return bo_ticker
+
+	return mapped
+
+
+def _ticker_has_price(ticker: str) -> bool:
+	"""Return True when yfinance metadata includes a usable market price."""
+	try:
+		info = yf.Ticker(ticker).info
+	except Exception:  # noqa: BLE001 - network/metadata access is best effort
+		return False
+
+	if not isinstance(info, dict):
+		return False
+
+	price = info.get("regularMarketPrice") or info.get("currentPrice")
+	return price is not None
 
 
 def _validate_ticker(ticker: str) -> str:
