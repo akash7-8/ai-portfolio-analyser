@@ -75,6 +75,7 @@ app.add_middleware(
 	allow_origins=[
 		"http://localhost:3000",
 		"https://ai-folio-analyser.vercel.app",
+		"https://ai-portfolio-analyser-akash7-8s-projects.vercel.app",
 	],
 	allow_credentials=True,
 	allow_methods=["*"],
