@@ -8,7 +8,7 @@
 
 ## 🚀 Live Demo
 
-> Coming soon — deploying on Vercel + Render
+> https://ai-folio-analyser.vercel.app/
 
 ---
 
