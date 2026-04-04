@@ -211,24 +211,58 @@ def _classify_sector(ticker: str, info: Mapping[str, object]) -> str | None:
 
 @lru_cache(maxsize=512)
 def infer_asset_class(ticker: str) -> str:
-    """Infer broad asset class label (US/India/Global Equities) from ticker."""
+    """Infer broad asset class label from ticker symbol and yfinance metadata."""
     clean_ticker = ticker.strip().upper()
     if not clean_ticker:
-        return "US Equities"
+        return "Unknown"
 
+    # Suffix present - authoritative, no lookup needed
     if clean_ticker.endswith(".NS") or clean_ticker.endswith(".BO"):
         return "India Equities"
 
+    # Try all candidates: raw, .NS, .BO
     for candidate in _ticker_candidates(clean_ticker):
         info = _get_ticker_metadata(candidate)
+        if not info:
+            continue
+
         country = str(info.get("country", "")).strip().lower()
         exchange = str(info.get("exchange", "")).strip().upper()
-        if country in {"india", "in"} or exchange in {"NSE", "BSE"}:
-            return "India Equities"
-        if country in {"united states", "us", "usa"}:
-            return "US Equities"
 
-    return "US Equities"
+        # Exchange check - yfinance returns "NSI" for NSE, not "NSE"
+        if exchange in {"NSE", "NSI", "BSE"}:
+            return "India Equities"
+
+        country_map = {
+            "india": "India Equities",
+            "in": "India Equities",
+            "united states": "US Equities",
+            "us": "US Equities",
+            "usa": "US Equities",
+            "china": "China Equities",
+            "cn": "China Equities",
+            "japan": "Japan Equities",
+            "jp": "Japan Equities",
+            "united kingdom": "UK Equities",
+            "gb": "UK Equities",
+            "uk": "UK Equities",
+            "south korea": "Korea Equities",
+            "kr": "Korea Equities",
+            "hong kong": "HK Equities",
+            "hk": "HK Equities",
+            "germany": "European Equities",
+            "france": "European Equities",
+            "netherlands": "European Equities",
+        }
+        if country in country_map:
+            return country_map[country]
+
+        # Last resort suffix check on candidate itself
+        if candidate.endswith(".NS") or candidate.endswith(".BO"):
+            return "India Equities"
+
+    # Never assume US - unknown is honest
+    return "Unknown"
 
 
 def _ticker_candidates(ticker: str) -> list[str]:

@@ -157,6 +157,23 @@ def _validate_ticker(ticker: str) -> str:
 	return ticker.strip().upper()
 
 
+def get_ticker_metadata(ticker: str) -> dict:
+	"""Return yfinance .info dict for the normalized ticker symbol.
+
+	Always normalizes the ticker first so callers receive metadata
+	for the correct exchange (NSE/BSE) rather than a bare symbol.
+	"""
+	normalized = normalize_ticker(ticker)
+	try:
+		info = yf.Ticker(normalized).info
+	except Exception:
+		return {}
+	if not isinstance(info, dict):
+		return {}
+	info["_normalized_ticker"] = normalized
+	return info
+
+
 if __name__ == "__main__":
 	# Example usage
 	print(get_current_price("AAPL").head())
