@@ -27,7 +27,7 @@ from backend.risk_metrics import (
 	select_benchmark,
 )
 from backend.sector_analysis import calculate_sector_exposure, infer_asset_class
-from backend.simulation import simulate_portfolio_monte_carlo
+from backend.simulation import simulate_portfolio_growth_intervals
 
 
 class AssetInput(BaseModel):
@@ -155,12 +155,20 @@ def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 
 	initial_investment = float(total_value)
 
-	simulation = simulate_portfolio_monte_carlo(
+	simulation = simulate_portfolio_growth_intervals(
 		initial_investment=initial_investment,
 		expected_annual_return=sim_expected_return,
 		annual_volatility=sim_volatility,
 		years=2,
+		num_simulations=10_000,
+		interval_months=2,
 	)
+	final_point = simulation[-1] if simulation else {"p10": total_value, "p50": total_value, "p90": total_value}
+	simulation_summary = {
+		"worst_case": float(final_point["p10"]),
+		"median_value": float(final_point["p50"]),
+		"best_case": float(final_point["p90"]),
+	}
 
 	try:
 		sector_exposure = calculate_sector_exposure(
@@ -175,7 +183,7 @@ def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		portfolio_score=float(scoring_result["portfolio_score"]),
 		risk_level=str(scoring_result["risk_level"]),
 		sector_exposure=sector_exposure,
-		simulation_results=simulation,
+		simulation_results=simulation_summary,
 	)
 
 	recommendation_engine = generate_portfolio_recommendations(
@@ -220,21 +228,6 @@ def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		use_percentage=True,
 	)
 
-	simulation_series = [
-		{
-			"label": "M0",
-			"p10": total_value,
-			"p50": total_value,
-			"p90": total_value,
-		},
-		{
-			"label": "M24",
-			"p10": round(float(simulation["worst_case"]), 2),
-			"p50": round(float(simulation["median_value"]), 2),
-			"p90": round(float(simulation["best_case"]), 2),
-		},
-	]
-
 	explanation_list = [
 		{"type": "positive", "title": "Strength", "text": explanation["strength"]},
 		{"type": "warning", "title": "Weakness", "text": explanation["weakness"]},
@@ -250,7 +243,7 @@ def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		"benchmark": benchmark,
 		"riskFreeRate": risk_free_rate,
 		"sector_exposure": sector_exposure_list,
-		"simulation": simulation_series,
+		"simulation": simulation,
 		"explanation": explanation_list,
 		"recommendation_engine": recommendation_engine,
 		"data_warnings": data_warnings,
