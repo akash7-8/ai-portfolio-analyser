@@ -493,7 +493,8 @@ def _build_asset_class_exposure(
 	for entry in asset_entries:
 		ticker = str(entry["ticker"])
 		weight = float(entry["weight"])
-		asset_class = infer_asset_class(normalize_ticker(ticker))
+		normalized = normalize_ticker(ticker)
+		asset_class = infer_asset_class(normalized)
 		groups[asset_class] = groups.get(asset_class, 0.0) + weight
 
 	asset_class_map = {
