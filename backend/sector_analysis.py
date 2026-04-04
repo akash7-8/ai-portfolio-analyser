@@ -211,16 +211,27 @@ def _classify_sector(ticker: str, info: Mapping[str, object]) -> str | None:
 
 @lru_cache(maxsize=512)
 def infer_asset_class(ticker: str) -> str:
-    """Infer broad asset class label from ticker symbol and yfinance metadata."""
     clean_ticker = ticker.strip().upper()
     if not clean_ticker:
         return "Unknown"
 
-    # Suffix present - authoritative, no lookup needed
+    # Suffix-based — authoritative, no network call needed
     if clean_ticker.endswith(".NS") or clean_ticker.endswith(".BO"):
         return "India Equities"
+    if clean_ticker.endswith(".L") or clean_ticker.endswith(".LON"):
+        return "UK Equities"
+    if clean_ticker.endswith(".T") or clean_ticker.endswith(".TYO"):
+        return "Japan Equities"
+    if clean_ticker.endswith(".HK"):
+        return "HK Equities"
+    if clean_ticker.endswith(".KS") or clean_ticker.endswith(".KQ"):
+        return "Korea Equities"
+    if clean_ticker.endswith(".SS") or clean_ticker.endswith(".SZ"):
+        return "China Equities"
+    if clean_ticker.endswith(".DE") or clean_ticker.endswith(".PA") or clean_ticker.endswith(".AS"):
+        return "European Equities"
 
-    # Try all candidates: raw, .NS, .BO
+    # No suffix — try yfinance metadata
     for candidate in _ticker_candidates(clean_ticker):
         info = _get_ticker_metadata(candidate)
         if not info:
@@ -229,27 +240,27 @@ def infer_asset_class(ticker: str) -> str:
         country = str(info.get("country", "")).strip().lower()
         exchange = str(info.get("exchange", "")).strip().upper()
 
-        # Exchange check - yfinance returns "NSI" for NSE, not "NSE"
-        if exchange in {"NSE", "NSI", "BSE"}:
+        if exchange in {"NSE", "NSI", "BSE", "MCX"}:
             return "India Equities"
+        if exchange in {"LSE", "LON"}:
+            return "UK Equities"
+        if exchange in {"TSE", "TYO"}:
+            return "Japan Equities"
+        if exchange in {"HKEX", "HKG"}:
+            return "HK Equities"
+        if exchange in {"KRX", "KOSDAQ"}:
+            return "Korea Equities"
+        if exchange in {"NMS", "NYQ", "NGM", "PCX", "NAS", "NYSE", "NASDAQ"}:
+            return "US Equities"
 
         country_map = {
             "india": "India Equities",
-            "in": "India Equities",
             "united states": "US Equities",
-            "us": "US Equities",
-            "usa": "US Equities",
             "china": "China Equities",
-            "cn": "China Equities",
             "japan": "Japan Equities",
-            "jp": "Japan Equities",
             "united kingdom": "UK Equities",
-            "gb": "UK Equities",
-            "uk": "UK Equities",
             "south korea": "Korea Equities",
-            "kr": "Korea Equities",
             "hong kong": "HK Equities",
-            "hk": "HK Equities",
             "germany": "European Equities",
             "france": "European Equities",
             "netherlands": "European Equities",
@@ -257,11 +268,10 @@ def infer_asset_class(ticker: str) -> str:
         if country in country_map:
             return country_map[country]
 
-        # Last resort suffix check on candidate itself
-        if candidate.endswith(".NS") or candidate.endswith(".BO"):
-            return "India Equities"
+    # No suffix, no metadata match — assume US (bare tickers with no suffix are almost always US)
+    if "." not in clean_ticker:
+        return "US Equities"
 
-    # Never assume US - unknown is honest
     return "Unknown"
 
 
