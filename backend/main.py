@@ -115,6 +115,10 @@ def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		{"ticker": ticker, "weight": weight}
 		for ticker, weight in weights_by_ticker.items()
 	]
+	normalized_asset_entries = [
+		{"ticker": normalize_ticker(str(asset["ticker"])), "weight": float(asset["weight"])}
+		for asset in asset_entries
+	]
 	weights = [asset["weight"] for asset in asset_entries]
 
 	try:
@@ -172,7 +176,7 @@ def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 
 	try:
 		sector_exposure = calculate_sector_exposure(
-			asset_entries,
+			normalized_asset_entries,
 			auto_update_map=True,
 		)
 	except ValueError as exc:
@@ -217,7 +221,7 @@ def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		"riskFreeRate": risk_free_rate,
 	}
 
-	asset_class_exposure = _build_asset_class_exposure(asset_entries)
+	asset_class_exposure = _build_asset_class_exposure(normalized_asset_entries)
 	diversification_block = {
 		"score": round(diversification_score, 2),
 		"assetClasses": asset_class_exposure,
@@ -489,7 +493,7 @@ def _build_asset_class_exposure(
 	for entry in asset_entries:
 		ticker = str(entry["ticker"])
 		weight = float(entry["weight"])
-		asset_class = infer_asset_class(ticker)
+		asset_class = infer_asset_class(normalize_ticker(ticker))
 		groups[asset_class] = groups.get(asset_class, 0.0) + weight
 
 	asset_class_map = {
@@ -507,6 +511,13 @@ def _build_asset_class_exposure(
 	color_map = {
 		"US Equities": "#3b82f6",
 		"India Equities": "#10b981",
+		"China Equities": "#f59e0b",
+		"Japan Equities": "#ec4899",
+		"Korea Equities": "#06b6d4",
+		"HK Equities": "#f97316",
+		"UK Equities": "#a78bfa",
+		"European Equities": "#14b8a6",
+		"Unknown": "#6b7280",
 		"Other": "#8b5cf6",
 	}
 	return [
