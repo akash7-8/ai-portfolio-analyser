@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import logging
 from math import sqrt
 from typing import List
 
@@ -33,6 +34,9 @@ from backend.risk_metrics import (
 )
 from backend.sector_analysis import calculate_sector_exposure, infer_asset_class
 from backend.simulation import simulate_portfolio_growth_intervals
+
+
+logger = logging.getLogger(__name__)
 
 
 class AssetInput(BaseModel):
@@ -95,7 +99,7 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	for ticker, asset in zip(normalized_tickers, payload.assets):
 		quantity_map[ticker] = quantity_map.get(ticker, 0.0) + float(asset.quantity)
 	data_warnings: list[str] = []
-	fetched_data = _fetch_current_prices_for_tickers(list(quantity_map.keys()), data_warnings)
+	fetched_data = await _fetch_current_prices_for_tickers(list(quantity_map.keys()), data_warnings)
 
 	total_value = sum(
 		float(fetched_data[ticker]["current_price"]) * quantity
@@ -595,7 +599,7 @@ def _fetch_returns_with_fallback(ticker: str) -> pd.DataFrame:
 	) from last_error
 
 
-def _fetch_current_prices_for_tickers(
+async def _fetch_current_prices_for_tickers(
 	tickers: List[str],
 	data_warnings: list[str],
 ) -> dict[str, dict[str, float]]:
@@ -603,7 +607,7 @@ def _fetch_current_prices_for_tickers(
 	results: dict[str, dict[str, float]] = {}
 	for ticker in tickers:
 		try:
-			price_df = _fetch_current_price_with_fallback(ticker)
+			price_df = await _fetch_current_price_with_fallback(ticker)
 		except ValueError as exc:
 			data_warnings.append(f"Skipped current price for {ticker}: {exc}")
 			continue
@@ -617,12 +621,15 @@ def _fetch_current_prices_for_tickers(
 	return results
 
 
-def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame:
-	"""Fetch current price for ticker, trying raw symbol then NSE suffix fallback."""
+async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame:
+	"""Fetch current price for ticker with Tier-2 AI resolver fallback."""
+	from ai_resolver import ai_resolve_ticker
+
 	clean_ticker = ticker.strip().upper()
 	if not clean_ticker:
 		raise ValueError("ticker must be a non-empty string")
 
+	# Tier-1: try raw symbol then .NS suffix
 	candidates = [clean_ticker]
 	if "." not in clean_ticker:
 		candidates.append(f"{clean_ticker}.NS")
@@ -631,8 +638,20 @@ def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame:
 	for candidate in candidates:
 		try:
 			return get_current_price(candidate)
-		except Exception as exc:  # noqa: BLE001 - preserve source error for API context
+		except Exception as exc:
 			last_error = exc
+
+	# Tier-2: ask AI resolver for the correct normalized ticker
+	logger.info("[main] Tier-1 price fetch failed for '%s', invoking Tier-2 AI resolver", clean_ticker)
+	try:
+		resolved = await ai_resolve_ticker(clean_ticker)
+		if resolved and resolved.get("normalized_ticker"):
+			t2 = resolved["normalized_ticker"]
+			if t2 not in candidates:  # avoid retrying same symbols
+				logger.info("[main] Tier-2 resolved '%s' -> '%s', retrying price fetch", clean_ticker, t2)
+				return get_current_price(t2)
+	except Exception as exc:
+		last_error = exc
 
 	raise ValueError(
 		f"Unable to fetch current price for ticker '{clean_ticker}'"
