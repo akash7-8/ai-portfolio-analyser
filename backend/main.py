@@ -640,10 +640,17 @@ async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame:
 		except Exception as exc:
 			last_error = exc
 
+	# after the for loop over candidates
+	logger.warning(
+		"[main] All Tier-1 candidates failed for '%s', candidates tried: %s",
+		clean_ticker,
+		candidates,
+	)
 	# Tier-2: ask AI resolver for the correct normalized ticker
 	logger.info("[main] Tier-1 price fetch failed for '%s', invoking Tier-2 AI resolver", clean_ticker)
 	try:
 		resolved = await ai_resolve_ticker(clean_ticker)
+		logger.info("[main] Tier-2 raw result for '%s': %s", clean_ticker, resolved)
 		if resolved and resolved.get("normalized_ticker"):
 			t2 = resolved["normalized_ticker"]
 			if t2 not in candidates:  # avoid retrying same symbols
