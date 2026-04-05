@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from ai_resolver import ai_resolve_ticker
 from backend.ai_agent import generate_portfolio_swot
 from backend.data_fetcher import (
 	get_current_price,
@@ -623,8 +624,6 @@ async def _fetch_current_prices_for_tickers(
 
 async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame:
 	"""Fetch current price for ticker with Tier-2 AI resolver fallback."""
-	from ai_resolver import ai_resolve_ticker
-
 	clean_ticker = ticker.strip().upper()
 	if not clean_ticker:
 		raise ValueError("ticker must be a non-empty string")
