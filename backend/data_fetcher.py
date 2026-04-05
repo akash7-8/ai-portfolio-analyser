@@ -200,6 +200,15 @@ async def get_ticker_metadata(ticker: str) -> dict:
 	if not isinstance(info, dict):
 		info = {}
 
+	logger.info(
+		"[data_fetcher] Tier-1 info keys for '%s': regularMarketPrice=%s currentPrice=%s navPrice=%s info_len=%d",
+		t1,
+		info.get("regularMarketPrice"),
+		info.get("currentPrice"),
+		info.get("navPrice"),
+		len(info),
+	)
+
 	# Determine if Tier-1 result is actually usable
 	# A valid yfinance response always has at least "regularMarketPrice" or "currentPrice"
 	price_present = (
