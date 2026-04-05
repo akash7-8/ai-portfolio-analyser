@@ -6,12 +6,12 @@ aggregates portfolio weights by sector.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, Mapping
 
-import yfinance as yf
+from backend.data_fetcher import get_ticker_metadata
 
 
 DEFAULT_MAP_PATH = Path(__file__).resolve().parent.parent / "data" / "sector_map.json"
@@ -53,7 +53,7 @@ def load_sector_map(file_path: str | None = None) -> Dict[str, str]:
     return normalized_map
 
 
-def calculate_sector_exposure(
+async def calculate_sector_exposure(
     assets: Iterable[Mapping[str, object]],
     sector_map: Mapping[str, str] | None = None,
     auto_update_map: bool = False,
@@ -100,7 +100,7 @@ def calculate_sector_exposure(
         sector = _resolve_sector(ticker, mapping)
 
         if sector == "Unknown":
-            resolved_sector = get_sector_from_yfinance_metadata(ticker)
+            resolved_sector = await get_sector_from_yfinance_metadata(ticker)
             if resolved_sector:
                 sector = resolved_sector
                 # Cache in-memory so subsequent lookups in the same run are fast.
@@ -130,8 +130,7 @@ def _resolve_sector(ticker: str, mapping: Mapping[str, str]) -> str:
     return "Unknown"
 
 
-@lru_cache(maxsize=512)
-def get_sector_from_yfinance_metadata(ticker: str) -> str | None:
+async def get_sector_from_yfinance_metadata(ticker: str) -> str | None:
     """Fetch sector using yfinance metadata with safe fallbacks.
 
     The function never raises for network/metadata errors; it returns None when
@@ -144,7 +143,7 @@ def get_sector_from_yfinance_metadata(ticker: str) -> str | None:
     candidates = _ticker_candidates(clean_ticker)
 
     for candidate in candidates:
-        metadata = _get_ticker_metadata(candidate)
+        metadata = await _get_ticker_metadata(candidate)
         sector = _extract_sector_label(candidate, metadata)
         if sector:
             return sector
@@ -152,13 +151,12 @@ def get_sector_from_yfinance_metadata(ticker: str) -> str | None:
     return None
 
 
-def _get_ticker_metadata(ticker: str) -> dict:
+async def _get_ticker_metadata(ticker: str) -> dict:
     """Safely read yfinance info payload for a ticker."""
     try:
-        info = yf.Ticker(ticker).info
+        info = await get_ticker_metadata(ticker)
     except Exception:  # noqa: BLE001 - avoid failing sector exposure on network calls
         return {}
-
     if not isinstance(info, dict):
         return {}
     return info
@@ -209,16 +207,15 @@ def _classify_sector(ticker: str, info: Mapping[str, object]) -> str | None:
     return None
 
 
-def infer_asset_class(ticker: str, info: dict | None = None) -> str:
+async def infer_asset_class(ticker: str, info: dict | None = None) -> str:
     # Tier-2 override: if AI resolver classified this, trust it
     if info and info.get("_ai_asset_class"):
         return info["_ai_asset_class"]
 
-    return _infer_asset_class_cached(ticker)
+    return await _infer_asset_class_cached(ticker)
 
 
-@lru_cache(maxsize=512)
-def _infer_asset_class_cached(ticker: str) -> str:
+async def _infer_asset_class_cached(ticker: str) -> str:
     clean_ticker = ticker.strip().upper()
     if not clean_ticker:
         return "Unknown"
@@ -241,7 +238,7 @@ def _infer_asset_class_cached(ticker: str) -> str:
 
     # No suffix — try yfinance metadata
     for candidate in _ticker_candidates(clean_ticker):
-        info = _get_ticker_metadata(candidate)
+        info = await _get_ticker_metadata(candidate)
         if not info:
             continue
 
@@ -336,4 +333,4 @@ if __name__ == "__main__":
         {"ticker": "HDFCBANK", "weight": 0.25},
         {"ticker": "RELIANCE", "weight": 0.40},
     ]
-    print(calculate_sector_exposure(sample_assets))
+    print(asyncio.run(calculate_sector_exposure(sample_assets)))

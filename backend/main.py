@@ -180,7 +180,7 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	}
 
 	try:
-		sector_exposure = calculate_sector_exposure(
+		sector_exposure = await calculate_sector_exposure(
 			normalized_asset_entries,
 			auto_update_map=True,
 		)
@@ -500,7 +500,7 @@ async def _build_asset_class_exposure(
 		weight = float(entry["weight"])
 		normalized = normalize_ticker(ticker)
 		ticker_info_dict = await get_ticker_metadata(normalized)
-		asset_class = infer_asset_class(normalized, info=ticker_info_dict)
+		asset_class = await infer_asset_class(normalized, info=ticker_info_dict)
 		groups[asset_class] = groups.get(asset_class, 0.0) + weight
 
 	asset_class_map = {

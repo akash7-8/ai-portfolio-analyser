@@ -124,10 +124,10 @@ def normalize_ticker(ticker: str) -> str:
 
 	mapped = TICKER_ALIASES.get(clean, clean)
 	prefer_nse = mapped in TICKER_ALIASES.values() or clean in TICKER_ALIASES
-	as_is_price = _ticker_has_price(mapped)
+	as_is_price = _ticker_has_price_direct(mapped)
 
 	ns_ticker = f"{mapped}.NS"
-	ns_price = _ticker_has_price(ns_ticker)
+	ns_price = _ticker_has_price_direct(ns_ticker)
 	if ns_price and (prefer_nse or not as_is_price):
 		return ns_ticker
 
@@ -135,13 +135,13 @@ def normalize_ticker(ticker: str) -> str:
 		return mapped
 
 	bo_ticker = f"{mapped}.BO"
-	if _ticker_has_price(bo_ticker):
+	if _ticker_has_price_direct(bo_ticker):
 		return bo_ticker
 
 	return mapped
 
 
-def _ticker_has_price(ticker: str) -> bool:
+def _ticker_has_price_direct(ticker: str) -> bool:
 	"""Return True when yfinance metadata includes a usable market price."""
 	try:
 		info = yf.Ticker(ticker).info
@@ -152,6 +152,24 @@ def _ticker_has_price(ticker: str) -> bool:
 		return False
 
 	price = info.get("regularMarketPrice") or info.get("currentPrice")
+	return price is not None
+
+
+async def _ticker_has_price(ticker: str) -> bool:
+	"""Return True when metadata contains any usable market/nav price."""
+	try:
+		info = await get_ticker_metadata(ticker)
+	except Exception:
+		return False
+
+	if not isinstance(info, dict):
+		return False
+
+	price = (
+		info.get("regularMarketPrice")
+		or info.get("currentPrice")
+		or info.get("navPrice")
+	)
 	return price is not None
 
 
