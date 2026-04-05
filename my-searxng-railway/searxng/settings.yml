@@ -1,0 +1,37 @@
+# searxng/settings.yml
+use_default_settings: true
+
+server:
+  secret_key: "changeme-use-a-long-random-string-here"  # replace this
+  limiter: false          # disable rate limiting (internal use only)
+  image_proxy: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: d
+    disabled: false
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+
+formats:
+  - html
+  - json          # CRITICAL — enables ?format=json queries
+
+ui:
+  static_use_hash: true
