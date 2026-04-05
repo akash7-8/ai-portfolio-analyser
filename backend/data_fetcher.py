@@ -141,71 +141,6 @@ def normalize_ticker(ticker: str) -> str:
 	return mapped
 
 
-async def normalize_ticker_with_fallback(ticker: str) -> dict:
-	"""
-	Tier-1: rule-based normalize_ticker() + yfinance validation.
-	Tier-2: ai_resolve_ticker() if Tier-1 yfinance validation fails.
-
-	Always returns a dict:
-	{
-		"normalized_ticker": str,
-		"source": "tier1" | "tier2" | "fallback",
-		"asset_class": str | None,
-		"sector": str | None,
-		"country": str | None,
-		"exchange": str | None,
-	}
-	"""
-	t1 = normalize_ticker(ticker)
-
-	# Tier-1 validation: check if yfinance can find any price data
-	try:
-		fast = yf.Ticker(t1).fast_info
-		if fast.last_price is not None:
-			return {
-				"normalized_ticker": t1,
-				"source": "tier1",
-				"asset_class": None,
-				"sector": None,
-				"country": None,
-				"exchange": None,
-			}
-	except Exception:
-		pass
-
-	# Tier-2: invoke AI resolver
-	logger.info(
-		"[data_fetcher] Tier-1 validation failed for '%s', invoking Tier-2 AI resolver",
-		t1,
-	)
-	resolved = await ai_resolve_ticker(ticker)
-
-	if resolved and resolved.get("normalized_ticker"):
-		return {
-			"normalized_ticker": resolved["normalized_ticker"],
-			"source": "tier2",
-			"asset_class": resolved.get("asset_class"),
-			"sector": resolved.get("sector"),
-			"country": resolved.get("country"),
-			"exchange": resolved.get("exchange"),
-		}
-
-	# Fallback: Tier-1 result even if yfinance didn't validate it
-	logger.warning(
-		"[data_fetcher] Tier-2 also failed for '%s', using Tier-1 result '%s' as fallback",
-		ticker,
-		t1,
-	)
-	return {
-		"normalized_ticker": t1,
-		"source": "fallback",
-		"asset_class": None,
-		"sector": None,
-		"country": None,
-		"exchange": None,
-	}
-
-
 def _ticker_has_price(ticker: str) -> bool:
 	"""Return True when yfinance metadata includes a usable market price."""
 	try:
@@ -233,31 +168,64 @@ async def get_ticker_metadata(ticker: str) -> dict:
 	Uses Tier-1 normalization with Tier-2 AI fallback.
 	Injects resolution metadata into the returned dict.
 	"""
-	resolution = await normalize_ticker_with_fallback(ticker)
-	normalized = resolution["normalized_ticker"]
+	import yfinance as yf
 
+	# Tier-1: rule-based normalization
+	t1 = normalize_ticker(ticker)
+
+	# Attempt yfinance full info fetch with Tier-1 normalized ticker
 	try:
-		info = yf.Ticker(normalized).info or {}
+		info = yf.Ticker(t1).info or {}
 	except Exception:
 		info = {}
 
 	if not isinstance(info, dict):
 		info = {}
 
-	# Always inject these so downstream consumers can rely on them
-	info["_normalized_ticker"] = normalized
-	info["_resolution_source"] = resolution["source"]
+	# Determine if Tier-1 result is actually usable
+	# A valid yfinance response always has at least "regularMarketPrice" or "currentPrice"
+	price_present = (
+		info.get("regularMarketPrice")
+		or info.get("currentPrice")
+		or info.get("navPrice")
+	)
 
-	# If Tier-2 resolved this ticker, inject AI metadata where yfinance is empty
-	if resolution["source"] == "tier2":
-		if not info.get("sector") and resolution.get("sector"):
-			info["sector"] = resolution["sector"]
-		if not info.get("country") and resolution.get("country"):
-			info["country"] = resolution["country"]
-		# _ai_asset_class is consumed by infer_asset_class() in sector_analysis.py
-		if resolution.get("asset_class"):
-			info["_ai_asset_class"] = resolution["asset_class"]
+	if price_present:
+		# Tier-1 success
+		info["_normalized_ticker"] = t1
+		info["_resolution_source"] = "tier1"
+		return info
 
+	# Tier-1 info fetch failed or returned empty — invoke Tier-2
+	logger.info("[data_fetcher] Tier-1 info empty for '%s', invoking Tier-2 AI resolver", t1)
+	resolved = await ai_resolve_ticker(ticker)
+
+	if resolved and resolved.get("normalized_ticker"):
+		t2 = resolved["normalized_ticker"]
+		try:
+			info2 = yf.Ticker(t2).info or {}
+		except Exception:
+			info2 = {}
+
+		if not isinstance(info2, dict):
+			info2 = {}
+
+		info2["_normalized_ticker"] = t2
+		info2["_resolution_source"] = "tier2"
+
+		if not info2.get("sector") and resolved.get("sector"):
+			info2["sector"] = resolved["sector"]
+		if not info2.get("country") and resolved.get("country"):
+			info2["country"] = resolved["country"]
+		if resolved.get("asset_class"):
+			info2["_ai_asset_class"] = resolved["asset_class"]
+
+		return info2
+
+	# Fallback: return whatever Tier-1 gave us even if empty
+	logger.warning("[data_fetcher] Tier-2 failed for '%s', using Tier-1 result as fallback", ticker)
+	info["_normalized_ticker"] = t1
+	info["_resolution_source"] = "fallback"
 	return info
 
 
