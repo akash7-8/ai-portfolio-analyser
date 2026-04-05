@@ -13,7 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backend.ai_agent import generate_portfolio_swot
-from backend.data_fetcher import get_current_price, get_historical_returns, normalize_ticker
+from backend.data_fetcher import (
+	get_current_price,
+	get_historical_returns,
+	get_ticker_metadata,
+	normalize_ticker,
+)
 from backend.diversification import calculate_diversification
 from backend.portfolio_engine import calculate_portfolio_score
 from backend.recommendation_engine import generate_portfolio_recommendations
@@ -82,7 +87,7 @@ def health() -> dict[str, str]:
 @app.post("/analyze_portfolio/")
 @app.post("/analyser_portfolio")
 @app.post("/analyser_portfolio/")
-def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
+async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	"""Analyze a portfolio and return diversification, score, risk, and SWOT."""
 	raw_tickers = [asset.ticker for asset in payload.assets]
 	normalized_tickers = _normalize_tickers_parallel(raw_tickers)
@@ -221,7 +226,7 @@ def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		"riskFreeRate": risk_free_rate,
 	}
 
-	asset_class_exposure = _build_asset_class_exposure(normalized_asset_entries)
+	asset_class_exposure = await _build_asset_class_exposure(normalized_asset_entries)
 	diversification_block = {
 		"score": round(diversification_score, 2),
 		"assetClasses": asset_class_exposure,
@@ -485,7 +490,7 @@ def _normalize_tickers_parallel(raw_tickers: List[str]) -> list[str]:
 		return list(executor.map(_normalize_input_ticker, raw_tickers))
 
 
-def _build_asset_class_exposure(
+async def _build_asset_class_exposure(
 	asset_entries: List[dict[str, float | str]],
 ) -> list[dict[str, float | str]]:
 	"""Build simple asset-class exposure grouping for frontend charts."""
@@ -494,7 +499,8 @@ def _build_asset_class_exposure(
 		ticker = str(entry["ticker"])
 		weight = float(entry["weight"])
 		normalized = normalize_ticker(ticker)
-		asset_class = infer_asset_class(normalized)
+		ticker_info_dict = await get_ticker_metadata(normalized)
+		asset_class = infer_asset_class(normalized, info=ticker_info_dict)
 		groups[asset_class] = groups.get(asset_class, 0.0) + weight
 
 	asset_class_map = {

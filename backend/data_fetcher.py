@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from functools import lru_cache
+import logging
 
 import pandas as pd
 import yfinance as yf
+from backend.ai_resolver import ai_resolve_ticker
+
+
+logger = logging.getLogger(__name__)
 
 
 TICKER_ALIASES = {
@@ -136,6 +141,71 @@ def normalize_ticker(ticker: str) -> str:
 	return mapped
 
 
+async def normalize_ticker_with_fallback(ticker: str) -> dict:
+	"""
+	Tier-1: rule-based normalize_ticker() + yfinance validation.
+	Tier-2: ai_resolve_ticker() if Tier-1 yfinance validation fails.
+
+	Always returns a dict:
+	{
+		"normalized_ticker": str,
+		"source": "tier1" | "tier2" | "fallback",
+		"asset_class": str | None,
+		"sector": str | None,
+		"country": str | None,
+		"exchange": str | None,
+	}
+	"""
+	t1 = normalize_ticker(ticker)
+
+	# Tier-1 validation: check if yfinance can find any price data
+	try:
+		fast = yf.Ticker(t1).fast_info
+		if fast.last_price is not None:
+			return {
+				"normalized_ticker": t1,
+				"source": "tier1",
+				"asset_class": None,
+				"sector": None,
+				"country": None,
+				"exchange": None,
+			}
+	except Exception:
+		pass
+
+	# Tier-2: invoke AI resolver
+	logger.info(
+		"[data_fetcher] Tier-1 validation failed for '%s', invoking Tier-2 AI resolver",
+		t1,
+	)
+	resolved = await ai_resolve_ticker(ticker)
+
+	if resolved and resolved.get("normalized_ticker"):
+		return {
+			"normalized_ticker": resolved["normalized_ticker"],
+			"source": "tier2",
+			"asset_class": resolved.get("asset_class"),
+			"sector": resolved.get("sector"),
+			"country": resolved.get("country"),
+			"exchange": resolved.get("exchange"),
+		}
+
+	# Fallback: Tier-1 result even if yfinance didn't validate it
+	logger.warning(
+		"[data_fetcher] Tier-2 also failed for '%s', using Tier-1 result '%s' as fallback",
+		ticker,
+		t1,
+	)
+	return {
+		"normalized_ticker": t1,
+		"source": "fallback",
+		"asset_class": None,
+		"sector": None,
+		"country": None,
+		"exchange": None,
+	}
+
+
 def _ticker_has_price(ticker: str) -> bool:
 	"""Return True when yfinance metadata includes a usable market price."""
 	try:
@@ -157,20 +227,37 @@ def _validate_ticker(ticker: str) -> str:
 	return ticker.strip().upper()
 
 
-def get_ticker_metadata(ticker: str) -> dict:
-	"""Return yfinance .info dict for the normalized ticker symbol.
-
-	Always normalizes the ticker first so callers receive metadata
-	for the correct exchange (NSE/BSE) rather than a bare symbol.
+async def get_ticker_metadata(ticker: str) -> dict:
 	"""
-	normalized = normalize_ticker(ticker)
+	Fetches yfinance .info dict for a ticker.
+	Uses Tier-1 normalization with Tier-2 AI fallback.
+	Injects resolution metadata into the returned dict.
+	"""
+	resolution = await normalize_ticker_with_fallback(ticker)
+	normalized = resolution["normalized_ticker"]
+
 	try:
-		info = yf.Ticker(normalized).info
+		info = yf.Ticker(normalized).info or {}
 	except Exception:
-		return {}
+		info = {}
+
 	if not isinstance(info, dict):
-		return {}
+		info = {}
+
+	# Always inject these so downstream consumers can rely on them
 	info["_normalized_ticker"] = normalized
+	info["_resolution_source"] = resolution["source"]
+
+	# If Tier-2 resolved this ticker, inject AI metadata where yfinance is empty
+	if resolution["source"] == "tier2":
+		if not info.get("sector") and resolution.get("sector"):
+			info["sector"] = resolution["sector"]
+		if not info.get("country") and resolution.get("country"):
+			info["country"] = resolution["country"]
+		# _ai_asset_class is consumed by infer_asset_class() in sector_analysis.py
+		if resolution.get("asset_class"):
+			info["_ai_asset_class"] = resolution["asset_class"]
+
 	return info
 
 

@@ -209,8 +209,16 @@ def _classify_sector(ticker: str, info: Mapping[str, object]) -> str | None:
     return None
 
 
+def infer_asset_class(ticker: str, info: dict | None = None) -> str:
+    # Tier-2 override: if AI resolver classified this, trust it
+    if info and info.get("_ai_asset_class"):
+        return info["_ai_asset_class"]
+
+    return _infer_asset_class_cached(ticker)
+
+
 @lru_cache(maxsize=512)
-def infer_asset_class(ticker: str) -> str:
+def _infer_asset_class_cached(ticker: str) -> str:
     clean_ticker = ticker.strip().upper()
     if not clean_ticker:
         return "Unknown"
