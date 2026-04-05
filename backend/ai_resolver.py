@@ -13,6 +13,11 @@ from typing import Optional
 import httpx
 
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
 
 SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "").rstrip("/")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
@@ -35,6 +40,7 @@ VALID_ASSET_CLASSES = {
 
 
 async def _searxng_search(query: str, num_results: int = 5) -> list[dict]:
+    print(f"[AI Resolver] _searxng_search called, SEARXNG_BASE_URL='{SEARXNG_BASE_URL}'", flush=True)
     if not SEARXNG_BASE_URL:
         logger.warning("[AI Resolver] SEARXNG_BASE_URL not set, skipping search")
         return []
@@ -140,6 +146,7 @@ Return ONLY a JSON object with exactly these fields (no markdown, no explanation
 
 async def ai_resolve_ticker(ticker: str) -> Optional[dict]:
     """Run SearXNG -> Groq pipeline and return structured ticker metadata."""
+    print(f"[AI Resolver] ai_resolve_ticker called for: {ticker}", flush=True)
     query = (
         f"{ticker} stock ticker symbol exchange yfinance "
         "site:finance.yahoo.com OR site:screener.in OR site:moneycontrol.com OR site:nseindia.com"
