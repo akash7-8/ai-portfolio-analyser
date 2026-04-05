@@ -19,8 +19,6 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.DEBUG)
 
-SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "").rstrip("/")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -40,15 +38,16 @@ VALID_ASSET_CLASSES = {
 
 
 async def _searxng_search(query: str, num_results: int = 5) -> list[dict]:
-    print(f"[AI Resolver] _searxng_search called, SEARXNG_BASE_URL='{SEARXNG_BASE_URL}'", flush=True)
-    if not SEARXNG_BASE_URL:
+    searxng_url = os.environ.get("SEARXNG_BASE_URL", "").rstrip("/")
+    print(f"[AI Resolver] _searxng_search called, SEARXNG_BASE_URL='{searxng_url}'", flush=True)
+    if not searxng_url:
         logger.warning("[AI Resolver] SEARXNG_BASE_URL not set, skipping search")
         return []
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                f"{SEARXNG_BASE_URL}/search",
+                f"{searxng_url}/search",
                 params={
                     "q": query,
                     "format": "json",
@@ -68,7 +67,8 @@ async def _searxng_search(query: str, num_results: int = 5) -> list[dict]:
 
 
 async def _groq_resolve(ticker: str, snippets: list[dict]) -> Optional[dict]:
-    if not GROQ_API_KEY:
+    groq_api_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_api_key:
         logger.warning("[AI Resolver] GROQ_API_KEY not set")
         return None
 
@@ -100,7 +100,7 @@ Return ONLY a JSON object with exactly these fields (no markdown, no explanation
             resp = await client.post(
                 GROQ_API_URL,
                 headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Authorization": f"Bearer {groq_api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
