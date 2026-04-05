@@ -188,6 +188,13 @@ async def get_ticker_metadata(ticker: str) -> dict:
 	"""
 	import yfinance as yf
 
+	# TEMPORARY TEST ONLY - force Tier-2 for MAZDOCK
+	if ticker.upper() == "MAZDOCK":
+		logger.info("[TEST] Forcing Tier-2 for MAZDOCK")
+		resolved = await ai_resolve_ticker("MAZDOCK")
+		logger.info("[TEST] Tier-2 result for MAZDOCK: %s", resolved)
+		# don't return, fall through to normal flow
+
 	# Tier-1: rule-based normalization
 	t1 = normalize_ticker(ticker)
 
