@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from ai_resolver import ai_resolve_ticker
+from backend.ai_resolver import ai_resolve_ticker
 from backend.ai_agent import generate_portfolio_swot
 from backend.data_fetcher import (
 	get_current_price,
