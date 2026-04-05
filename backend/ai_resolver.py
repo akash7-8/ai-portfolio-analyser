@@ -39,7 +39,6 @@ VALID_ASSET_CLASSES = {
 
 async def _searxng_search(query: str, num_results: int = 5) -> list[dict]:
     searxng_url = os.environ.get("SEARXNG_BASE_URL", "").rstrip("/")
-    print(f"[AI Resolver] _searxng_search called, SEARXNG_BASE_URL='{searxng_url}'", flush=True)
     if not searxng_url:
         logger.warning("[AI Resolver] SEARXNG_BASE_URL not set, skipping search")
         return []
@@ -146,7 +145,6 @@ Return ONLY a JSON object with exactly these fields (no markdown, no explanation
 
 async def ai_resolve_ticker(ticker: str) -> Optional[dict]:
     """Run SearXNG -> Groq pipeline and return structured ticker metadata."""
-    print(f"[AI Resolver] ai_resolve_ticker called for: {ticker}", flush=True)
     query = (
         f"{ticker} stock ticker symbol exchange yfinance "
         "site:finance.yahoo.com OR site:screener.in OR site:moneycontrol.com OR site:nseindia.com"
