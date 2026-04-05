@@ -1,8 +1,7 @@
-# searxng/settings.yml
 use_default_settings: true
 
 server:
-  secret_key: "changeme-use-a-long-random-string-here"  # replace this
+  secret_key: "ai_portfolio_analyser_custom_secret_key"  # Replaced with a solid string
   limiter: false          # disable rate limiting (internal use only)
   image_proxy: false
 
@@ -10,6 +9,9 @@ search:
   safe_search: 0
   autocomplete: ""
   default_lang: "en"
+  formats:                
+    - html
+    - json
 
 engines:
   - name: google
@@ -28,10 +30,6 @@ engines:
 outgoing:
   request_timeout: 10.0
   max_request_timeout: 15.0
-
-formats:
-  - html
-  - json          # CRITICAL — enables ?format=json queries
 
 ui:
   static_use_hash: true
