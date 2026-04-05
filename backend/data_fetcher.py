@@ -8,7 +8,7 @@ import logging
 
 import pandas as pd
 import yfinance as yf
-from backend.ai_resolver import ai_resolve_ticker
+from ai_resolver import ai_resolve_ticker
 
 
 logger = logging.getLogger(__name__)
