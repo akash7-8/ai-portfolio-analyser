@@ -23,7 +23,7 @@ from backend.data_fetcher import (
 )
 from backend.diversification import calculate_diversification
 from backend.portfolio_engine import calculate_portfolio_score
-from backend.recommendation_engine import generate_portfolio_recommendations
+from backend.recommendation_engine import generate_swot_with_groq
 from backend.rebalance import simulate_rebalance
 from backend.risk_metrics import (
 	calculate_portfolio_risk_metrics,
@@ -132,7 +132,7 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	weights = [asset["weight"] for asset in asset_entries]
 
 	try:
-		_, diversification_score = calculate_diversification(weights)
+		hhi_score, diversification_score = calculate_diversification(weights)
 	except ValueError as exc:
 		raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -200,10 +200,6 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		simulation_results=simulation_summary,
 	)
 
-	recommendation_engine = generate_portfolio_recommendations(
-		diversification_score=diversification_score,
-		sector_exposure=sector_exposure,
-	)
 	benchmark = select_benchmark(list(weights_by_ticker.keys()))
 	risk_free_rate = 0.065 if benchmark == "^NSEI" else 0.05
 	beta = compute_beta(portfolio_returns, benchmark)
@@ -214,6 +210,35 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		risk_free_rate=risk_free_rate,
 	)
 	daily_change = compute_daily_change(weights_by_ticker, total_value, fetched_data)
+
+	recommendation_engine = await generate_swot_with_groq(
+		diversification_score=diversification_score,
+		sector_exposure=sector_exposure,
+		holdings=[
+			{
+				"ticker": ticker,
+				"weight": weights_by_ticker.get(ticker, 0.0),
+				"sector": "Unknown",
+				"current_price": fetched_data.get(ticker, {}).get("current_price", "N/A"),
+			}
+			for ticker in weights_by_ticker
+		],
+		metrics={
+			"beta": beta,
+			"alpha": alpha,
+			"sharpe": float(risk_metrics["sharpe_ratio"]),
+			"annualReturn": float(annual_return),
+			"hhi_score": float(hhi_score),
+			"portfolio_score": float(scoring_result["portfolio_score"]),
+			"dailyChangePct": float(daily_change.get("dailyChangePct", 0.0)),
+		},
+		monte_carlo={
+			"p10": float(final_point.get("p10", total_value)),
+			"p50": float(final_point.get("p50", total_value)),
+			"p90": float(final_point.get("p90", total_value)),
+		},
+		total_value=float(total_value),
+	)
 
 	total_value = round(float(total_value), 2)
 
