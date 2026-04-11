@@ -33,7 +33,12 @@ from backend.risk_metrics import (
 	compute_portfolio_annual_return,
 	select_benchmark,
 )
-from backend.sector_analysis import calculate_sector_exposure, infer_asset_class
+from backend.sector_analysis import (
+	calculate_sector_exposure,
+	get_sector_from_yfinance_metadata,
+	infer_asset_class,
+	load_sector_map,
+)
 from backend.simulation import simulate_portfolio_growth_intervals
 
 
@@ -136,6 +141,23 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	except ValueError as exc:
 		raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+	ticker_sector_map: dict[str, str] = {}
+	try:
+		sector_lookup = load_sector_map()
+	except Exception:
+		sector_lookup = {}
+	for asset in normalized_asset_entries:
+		ticker = str(asset.get("ticker", "")).strip().upper()
+		if not ticker:
+			continue
+		base_ticker = ticker.split(".", 1)[0]
+		sector_label = sector_lookup.get(ticker) or sector_lookup.get(base_ticker) or "Unknown"
+		if sector_label == "Unknown":
+			resolved_sector = await get_sector_from_yfinance_metadata(ticker)
+			if resolved_sector:
+				sector_label = resolved_sector
+		ticker_sector_map[ticker] = sector_label
+
 	try:
 		(
 			expected_return,
@@ -216,12 +238,12 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		sector_exposure=sector_exposure,
 		holdings=[
 			{
-				"ticker": ticker,
-				"weight": weights_by_ticker.get(ticker, 0.0),
-				"sector": "Unknown",
-				"current_price": fetched_data.get(ticker, {}).get("current_price", "N/A"),
+				"ticker": t,
+				"weight": weights_by_ticker.get(t, 0.0),
+				"sector": ticker_sector_map.get(t, "Unknown"),
+				"current_price": fetched_data.get(t, {}).get("current_price", "N/A"),
 			}
-			for ticker in weights_by_ticker
+			for t in weights_by_ticker
 		],
 		metrics={
 			"beta": beta,
