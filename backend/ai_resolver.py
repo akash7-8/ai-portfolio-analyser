@@ -282,3 +282,240 @@ Rules:
             return {}
 
     return {}
+
+
+async def scrape_screener_in(ticker: str) -> dict | None:
+    """
+    Fetch stock data from screener.in for Indian equities.
+    Returns partial data dict or None if not found.
+    """
+    clean = ticker.replace(".NS", "").replace(".BO", "").upper()
+    url = f"https://www.screener.in/company/{clean}/"
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"},
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(url)
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        result: dict[str, object] = {}
+
+        ratios = soup.select("#top-ratios li")
+        for li in ratios:
+            label = li.select_one(".name")
+            value = li.select_one(".number")
+            if not label or not value:
+                continue
+            label_text = label.get_text(strip=True).lower()
+            value_text = value.get_text(strip=True).replace(",", "")
+            try:
+                if "market cap" in label_text:
+                    result["market_cap"] = float(value_text)
+                elif "p/e" in label_text:
+                    result["pe_ratio"] = float(value_text)
+                elif "52w high" in label_text or "high" in label_text:
+                    result["week_52_high"] = float(value_text)
+                elif "52w low" in label_text or "low" in label_text:
+                    result["week_52_low"] = float(value_text)
+            except ValueError:
+                continue
+
+        price_candidates = soup.select(".company-ratios .number")
+        if price_candidates:
+            try:
+                result["current_price"] = float(
+                    price_candidates[0].get_text(strip=True).replace(",", "")
+                )
+            except ValueError:
+                pass
+
+        sector_el = soup.select_one(".company-links a")
+        if sector_el:
+            result["sector"] = sector_el.get_text(strip=True)
+
+        if result:
+            result["source"] = "screener.in"
+            result["confidence"] = "medium"
+            result["ticker"] = clean
+            logger.info("[Screener.in] Fetched data for %s: %s", clean, result)
+            return result
+        return None
+
+    except Exception as exc:  # noqa: BLE001 - scraper is best-effort
+        logger.warning("[Screener.in] Failed for %s: %s", ticker, exc)
+        return None
+
+
+async def ai_web_search_price(ticker: str, context_hints: dict = None) -> dict | None:
+    """
+    Last-resort price fetch via SearXNG search + Groq extraction.
+    Used when both yfinance and screener.in fail.
+
+    Returns partial data dict with current_price and whatever else
+    Groq could confidently extract, or None if extraction fails.
+    """
+    _ = context_hints
+    searxng_base_url = os.environ.get("SEARXNG_BASE_URL", "").rstrip("/")
+    groq_api_key = os.environ.get("GROQ_API_KEY", "")
+
+    if not searxng_base_url or not groq_api_key:
+        return None
+
+    clean = ticker.replace(".NS", "").replace(".BO", "")
+    queries = [
+        f"{clean} share price today NSE",
+        f"{clean} stock current price India 2026",
+    ]
+
+    snippets: list[str] = []
+    async with httpx.AsyncClient(timeout=8) as client:
+        for query in queries:
+            try:
+                resp = await client.get(
+                    f"{searxng_base_url}/search",
+                    params={"q": query, "format": "json"},
+                )
+                resp.raise_for_status()
+                results = resp.json().get("results", [])[:3]
+                for result in results:
+                    snippets.append(
+                        f"{result.get('title', '')} | {result.get('content', '')[:300]}"
+                    )
+            except Exception as exc:  # noqa: BLE001 - continue with partial snippets
+                logger.warning("[WebSearch] Query failed for %s: %s", ticker, exc)
+
+    if not snippets:
+        return None
+
+    prompt = f"""Extract stock data for ticker {clean} from these search snippets.
+Return ONLY valid JSON, no preamble:
+
+Snippets:
+{chr(10).join(snippets)}
+
+{{
+  "current_price": <number or null>,
+  "currency": "<INR or USD or null>",
+  "sector": "<sector name or null>",
+  "market_cap": <number in crores or null>,
+  "annual_return_1y": <decimal e.g. 0.12 for 12% or null>,
+  "confidence": "<high|medium|low>"
+}}
+
+Rules:
+- Only include values you are confident about from the snippets
+- Set to null if not clearly mentioned
+- current_price must be a recent trading price, not a historical one"""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {groq_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "llama-3.1-8b-instant",
+            "max_tokens": 200,
+            "temperature": 0.1,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            parsed = json.loads(raw)
+            if parsed.get("current_price"):
+                parsed["source"] = "ai_web_search"
+                parsed["ticker"] = clean
+                logger.info("[WebSearch] Extracted data for %s: %s", clean, parsed)
+                return parsed
+            return None
+    except Exception as exc:  # noqa: BLE001 - extraction should not crash flow
+        logger.warning("[WebSearch] Groq extraction failed for %s: %s", ticker, exc)
+        return None
+
+
+async def fetch_finviz(ticker: str) -> dict | None:
+    """
+    Fetch US stock data from Finviz. Only call for tickers without .NS/.BO suffix.
+    """
+    if ".NS" in ticker or ".BO" in ticker:
+        return None
+
+    url = f"https://finviz.com/quote.ashx?t={ticker.upper()}"
+    try:
+        async with httpx.AsyncClient(
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"},
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(url)
+            if resp.status_code in (404, 403):
+                return None
+            resp.raise_for_status()
+
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        result: dict[str, object] = {}
+
+        table = soup.select("table.snapshot-table2 td")
+        labels: dict[str, str] = {}
+        for i in range(0, len(table) - 1, 2):
+            label = table[i].get_text(strip=True).lower()
+            value = table[i + 1].get_text(strip=True)
+            labels[label] = value
+
+        def parse_num(val: str) -> float | None:
+            try:
+                normalized = (
+                    val.replace(",", "")
+                    .replace("%", "")
+                    .replace("B", "e9")
+                    .replace("M", "e6")
+                )
+                return float(normalized)
+            except ValueError:
+                return None
+
+        if "price" in labels:
+            result["current_price"] = parse_num(labels["price"])
+        if "beta" in labels:
+            result["beta"] = parse_num(labels["beta"])
+        if "52w high" in labels:
+            result["week_52_high"] = parse_num(labels["52w high"])
+        if "52w low" in labels:
+            result["week_52_low"] = parse_num(labels["52w low"])
+        if "sector" in labels:
+            result["sector"] = labels["sector"]
+        if "perf year" in labels:
+            value = parse_num(labels["perf year"])
+            if value is not None:
+                result["annual_return_1y"] = value / 100
+
+        if result.get("current_price"):
+            result["source"] = "finviz"
+            result["confidence"] = "high"
+            result["ticker"] = ticker.upper()
+            logger.info("[Finviz] Fetched data for %s: %s", ticker, result)
+            return result
+        return None
+
+    except Exception as exc:  # noqa: BLE001 - scraper is best-effort
+        logger.warning("[Finviz] Failed for %s: %s", ticker, exc)
+        return None

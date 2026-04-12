@@ -656,14 +656,14 @@ def _fetch_returns_with_fallback(ticker: str) -> pd.DataFrame:
 async def _fetch_current_prices_for_tickers(
 	tickers: List[str],
 	data_warnings: list[str],
-) -> tuple[dict[str, dict[str, float]], int]:
+) -> tuple[dict[str, dict[str, object]], int]:
 	"""Fetch current prices with Tier-1 parallel fetch and Tier-2 batch resolver."""
 	tier1_results = await asyncio.gather(
 		*[_fetch_current_price_with_fallback(ticker) for ticker in tickers],
 		return_exceptions=True,
 	)
 
-	prices: dict[str, dict[str, float]] = {}
+	prices: dict[str, dict[str, object]] = {}
 	failed_tickers: list[str] = []
 
 	for ticker, result in zip(tickers, tier1_results):
@@ -717,14 +717,31 @@ async def _fetch_current_prices_for_tickers(
 					resolved_ticker,
 				)
 			else:
-				logger.warning(
-					"[main] Batch Tier-2 resolved %s -> %s but yfinance still has no data.",
+				web_result = await _fetch_tier2_web_data(
 					original_ticker,
-					resolved_ticker,
+					str(resolved_ticker),
 				)
-				data_warnings.append(
-					f"Batch Tier-2 resolved {original_ticker} -> {resolved_ticker} but no current_price"
-				)
+				if web_result and web_result.get("current_price"):
+					prices[original_ticker] = {
+						"current_price": web_result["current_price"],
+						"_source": web_result.get("source", "web"),
+						"_confidence": web_result.get("confidence", "medium"),
+						"_data_gaps": web_result.get("data_gaps", []),
+					}
+					logger.info(
+						"[Phase4b] Web data used for %s: price=%s source=%s",
+						original_ticker,
+						web_result["current_price"],
+						web_result.get("source"),
+					)
+				else:
+					logger.warning(
+						"[main] Phase4b also failed for %s, excluding from portfolio.",
+						original_ticker,
+					)
+					data_warnings.append(
+						f"Phase4b failed for {original_ticker} after resolved ticker {resolved_ticker}"
+					)
 
 	return prices, len(failed_tickers)
 
@@ -758,5 +775,35 @@ async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame | None
 		clean_ticker,
 	)
 	# Tier-2 is intentionally handled by batch resolver in _fetch_current_prices_for_tickers.
+	return None
+
+
+async def _fetch_tier2_web_data(
+	original_ticker: str,
+	resolved_ticker: str,
+) -> dict | None:
+	"""Phase 4b fallback chain: screener.in -> finviz -> ai_web_search."""
+	from backend.ai_resolver import ai_web_search_price, fetch_finviz, scrape_screener_in
+
+	is_indian = resolved_ticker.endswith(".NS") or resolved_ticker.endswith(".BO")
+
+	if is_indian:
+		result = await scrape_screener_in(resolved_ticker)
+		if result and result.get("current_price"):
+			logger.info("[Phase4b] screener.in success for %s", original_ticker)
+			return result
+
+	if not is_indian:
+		result = await fetch_finviz(resolved_ticker)
+		if result and result.get("current_price"):
+			logger.info("[Phase4b] finviz success for %s", original_ticker)
+			return result
+
+	result = await ai_web_search_price(resolved_ticker)
+	if result and result.get("current_price"):
+		logger.info("[Phase4b] ai_web_search success for %s", original_ticker)
+		return result
+
+	logger.warning("[Phase4b] All web sources failed for %s", original_ticker)
 	return None
 
