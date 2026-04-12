@@ -707,13 +707,22 @@ async def _fetch_current_prices_for_tickers(
 				data_warnings.append(f"Batch resolver normalized_ticker missing for {original_ticker}")
 				continue
 
-			retry_result = await _fetch_current_price_with_fallback(str(resolved_ticker))
-			if retry_result is not None and not retry_result.empty and "current_price" in retry_result.columns:
+			try:
+				retry_result = await _fetch_current_price_with_fallback(str(resolved_ticker))
+			except Exception as exc:
+				logger.warning(
+					"[main] yfinance retry raised exception for %s: %s",
+					resolved_ticker,
+					exc,
+				)
+				retry_result = None
+
+			if retry_result is not None:
 				prices[original_ticker] = {
 					"current_price": float(retry_result["current_price"].iloc[-1])
 				}
 				logger.info(
-					"[main] Batch Tier-2 success: %s -> %s",
+					"[main] Batch Tier-2 yfinance success: %s -> %s",
 					original_ticker,
 					resolved_ticker,
 				)
@@ -732,14 +741,7 @@ async def _fetch_current_prices_for_tickers(
 						"current_price": web_result["current_price"],
 						"_source": web_result.get("source", "web"),
 						"_confidence": web_result.get("confidence", "medium"),
-						"_data_gaps": web_result.get("data_gaps", []),
 					}
-					logger.info(
-						"[Phase4b] Web data used for %s: price=%s source=%s",
-						original_ticker,
-						web_result["current_price"],
-						web_result.get("source"),
-					)
 				else:
 					logger.warning(
 						"[main] Phase4b also failed for %s, excluding from portfolio.",
