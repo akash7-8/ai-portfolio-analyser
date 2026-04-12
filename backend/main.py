@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from math import sqrt
@@ -13,7 +14,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from backend.ai_resolver import ai_resolve_ticker
 from backend.ai_agent import generate_portfolio_swot
 from backend.data_fetcher import (
 	get_current_price,
@@ -233,6 +233,8 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	)
 	daily_change = compute_daily_change(weights_by_ticker, total_value, fetched_data)
 
+	# Before SWOT call, ensure resolver quota has cleared.
+	await asyncio.sleep(1)
 	recommendation_engine = await generate_swot_with_groq(
 		diversification_score=diversification_score,
 		sector_exposure=sector_exposure,
@@ -651,62 +653,101 @@ async def _fetch_current_prices_for_tickers(
 	tickers: List[str],
 	data_warnings: list[str],
 ) -> dict[str, dict[str, float]]:
-	"""Fetch current prices for tickers, keeping successful results only."""
-	results: dict[str, dict[str, float]] = {}
-	for ticker in tickers:
-		try:
-			price_df = await _fetch_current_price_with_fallback(ticker)
-		except ValueError as exc:
-			data_warnings.append(f"Skipped current price for {ticker}: {exc}")
+	"""Fetch current prices with Tier-1 parallel fetch and Tier-2 batch resolver."""
+	tier1_results = await asyncio.gather(
+		*[_fetch_current_price_with_fallback(ticker) for ticker in tickers],
+		return_exceptions=True,
+	)
+
+	prices: dict[str, dict[str, float]] = {}
+	failed_tickers: list[str] = []
+
+	for ticker, result in zip(tickers, tier1_results):
+		if isinstance(result, Exception) or result is None:
+			failed_tickers.append(ticker)
+			if isinstance(result, Exception):
+				data_warnings.append(f"Skipped Tier-1 price for {ticker}: {result}")
 			continue
 
-		if price_df.empty or "current_price" not in price_df.columns:
-			data_warnings.append(f"Skipped current price for {ticker}: missing current_price")
+		if result.empty or "current_price" not in result.columns:
+			failed_tickers.append(ticker)
+			data_warnings.append(f"Skipped Tier-1 price for {ticker}: missing current_price")
 			continue
 
-		results[ticker] = {"current_price": float(price_df["current_price"].iloc[-1])}
+		prices[ticker] = {"current_price": float(result["current_price"].iloc[-1])}
 
-	return results
+	if failed_tickers:
+		logger.info(
+			"[main] %d tickers failed Tier-1, batch resolving: %s",
+			len(failed_tickers),
+			failed_tickers,
+		)
+
+		from backend.ai_resolver import ai_resolve_tickers_batch
+
+		batch_results = await ai_resolve_tickers_batch(failed_tickers)
+
+		for original_ticker in failed_tickers:
+			resolution = batch_results.get(original_ticker)
+			if not resolution:
+				logger.warning(
+					"[main] Batch resolve returned nothing for %s, skipping.",
+					original_ticker,
+				)
+				data_warnings.append(f"Batch resolver returned no mapping for {original_ticker}")
+				continue
+
+			resolved_ticker = resolution.get("normalized_ticker")
+			if not resolved_ticker:
+				data_warnings.append(f"Batch resolver normalized_ticker missing for {original_ticker}")
+				continue
+
+			retry_result = await _fetch_current_price_with_fallback(str(resolved_ticker))
+			if retry_result is not None and not retry_result.empty and "current_price" in retry_result.columns:
+				prices[original_ticker] = {
+					"current_price": float(retry_result["current_price"].iloc[-1])
+				}
+				logger.info(
+					"[main] Batch Tier-2 success: %s -> %s",
+					original_ticker,
+					resolved_ticker,
+				)
+			else:
+				logger.warning(
+					"[main] Batch Tier-2 resolved %s -> %s but yfinance still has no data.",
+					original_ticker,
+					resolved_ticker,
+				)
+				data_warnings.append(
+					f"Batch Tier-2 resolved {original_ticker} -> {resolved_ticker} but no current_price"
+				)
+
+	return prices
 
 
-async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame:
-	"""Fetch current price for ticker with Tier-2 AI resolver fallback."""
+async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame | None:
+	"""Fetch current price for ticker using strict Tier-1 candidates only."""
 	clean_ticker = ticker.strip().upper()
 	if not clean_ticker:
-		raise ValueError("ticker must be a non-empty string")
+		return None
 
 	# Tier-1: try raw symbol then .NS suffix
 	candidates = [clean_ticker]
 	if "." not in clean_ticker:
 		candidates.append(f"{clean_ticker}.NS")
 
-	last_error: Exception | None = None
 	for candidate in candidates:
 		try:
 			return get_current_price(candidate)
-		except Exception as exc:
-			last_error = exc
+		except Exception:
+			continue
 
-	# after the for loop over candidates
+	# Only reach here if both Tier-1 candidates failed.
 	logger.warning(
 		"[main] All Tier-1 candidates failed for '%s', candidates tried: %s",
 		clean_ticker,
 		candidates,
 	)
-	# Tier-2: ask AI resolver for the correct normalized ticker
-	logger.info("[main] Tier-1 price fetch failed for '%s', invoking Tier-2 AI resolver", clean_ticker)
-	try:
-		resolved = await ai_resolve_ticker(clean_ticker)
-		logger.info("[main] Tier-2 raw result for '%s': %s", clean_ticker, resolved)
-		if resolved and resolved.get("normalized_ticker"):
-			t2 = resolved["normalized_ticker"]
-			if t2 not in candidates:  # avoid retrying same symbols
-				logger.info("[main] Tier-2 resolved '%s' -> '%s', retrying price fetch", clean_ticker, t2)
-				return get_current_price(t2)
-	except Exception as exc:
-		last_error = exc
-
-	raise ValueError(
-		f"Unable to fetch current price for ticker '{clean_ticker}'"
-	) from last_error
+	# Tier-2 is intentionally handled by batch resolver in _fetch_current_prices_for_tickers.
+	return None
 

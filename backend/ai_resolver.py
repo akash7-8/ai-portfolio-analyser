@@ -165,3 +165,119 @@ async def ai_resolve_ticker(ticker: str) -> Optional[dict]:
         logger.warning("[AI Resolver] Failed to resolve: %s", ticker)
 
     return result
+
+
+async def ai_resolve_tickers_batch(tickers: list[str]) -> dict[str, dict]:
+    """Resolve multiple failed tickers in a single SearXNG + Groq round trip."""
+    if not tickers:
+        return {}
+
+    groq_api_key = os.environ.get("GROQ_API_KEY", "")
+    searxng_base_url = os.environ.get("SEARXNG_BASE_URL", "").rstrip("/")
+
+    if not groq_api_key:
+        logger.warning("[AI Resolver Batch] GROQ_API_KEY not set, skipping batch resolve.")
+        return {}
+
+    async def _search_one(ticker: str) -> tuple[str, list[str]]:
+        if not searxng_base_url:
+            return ticker, []
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(
+                    f"{searxng_base_url}/search",
+                    params={
+                        "q": f"{ticker} NSE BSE stock ticker symbol",
+                        "format": "json",
+                    },
+                )
+                resp.raise_for_status()
+                results = resp.json().get("results", [])[:3]
+                snippets = [
+                    f"{result.get('title', '')} {result.get('content', '')}"[:300]
+                    for result in results
+                ]
+                return ticker, snippets
+        except Exception as exc:  # noqa: BLE001 - best-effort context fetch
+            logger.warning("[AI Resolver Batch] SearXNG failed for %s: %s", ticker, exc)
+            return ticker, []
+
+    search_results = await asyncio.gather(*[_search_one(ticker) for ticker in tickers])
+
+    ticker_context_block = ""
+    for ticker, snippets in search_results:
+        snippet_text = " | ".join(snippets) if snippets else "No search results found."
+        ticker_context_block += f"\nTicker: {ticker}\nContext: {snippet_text}\n"
+
+    prompt = f"""You are a financial data expert. Resolve each ticker symbol below to its correct Yahoo Finance format using the search context provided.
+
+{ticker_context_block}
+
+Return ONLY a valid JSON array, no preamble, no markdown fences:
+[
+  {{
+    "input": "<original ticker>",
+    "normalized_ticker": "<Yahoo Finance format e.g. MAZDOCK.NS>",
+    "exchange": "<NSE|BSE|NYSE|NASDAQ|etc>",
+    "country": "<country name>",
+    "sector": "<sector name>",
+    "asset_class": "<India Equities|US Equities|ETF|etc>"
+  }}
+]
+
+Rules:
+- For Indian stocks use .NS suffix for NSE, .BO for BSE
+- If you cannot confidently resolve a ticker, set normalized_ticker to null
+- Return one object per input ticker, in the same order
+- Return ONLY the JSON array"""
+
+    headers = {
+        "Authorization": f"Bearer {groq_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "max_tokens": 500,
+        "temperature": 0.1,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                parsed = json.loads(raw)
+
+                result: dict[str, dict] = {}
+                for item in parsed:
+                    input_ticker = item.get("input")
+                    if input_ticker and item.get("normalized_ticker"):
+                        result[str(input_ticker)] = item
+
+                logger.info(
+                    "[AI Resolver Batch] Resolved %d/%d tickers in one Groq call.",
+                    len(result),
+                    len(tickers),
+                )
+                return result
+        except (json.JSONDecodeError, KeyError) as exc:
+            if attempt == 0:
+                logger.warning("[AI Resolver Batch] Parse failed, retrying: %s", exc)
+                continue
+            logger.error("[AI Resolver Batch] Failed after 2 attempts: %s", exc)
+            return {}
+        except Exception as exc:  # noqa: BLE001 - API/network failure
+            logger.error("[AI Resolver Batch] Groq call failed: %s", exc)
+            return {}
+
+    return {}
