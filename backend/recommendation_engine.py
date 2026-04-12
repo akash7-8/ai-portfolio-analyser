@@ -152,6 +152,14 @@ def _is_relevant_snippet(snippet: dict, query: str) -> bool:
     query_words = {
         word for word in query.lower().split() if len(word) > 3 and word not in _QUERY_STOPWORDS
     }
+
+    first_token = query.lower().split()[0] if query else ""
+    if first_token:
+        query_words.add(first_token)
+
+    if not query_words:
+        return True
+
     title_words = set(title.lower().split())
     return bool(query_words & title_words)
 

@@ -690,6 +690,7 @@ async def _fetch_current_prices_for_tickers(
 		from backend.ai_resolver import ai_resolve_tickers_batch
 
 		batch_results = await ai_resolve_tickers_batch(failed_tickers)
+		print(f"[DEBUG] batch_results: {batch_results}", flush=True)
 
 		for original_ticker in failed_tickers:
 			resolution = batch_results.get(original_ticker)
@@ -717,10 +718,15 @@ async def _fetch_current_prices_for_tickers(
 					resolved_ticker,
 				)
 			else:
+				print(
+					f"[DEBUG] yfinance retry failed for {original_ticker}, resolved={resolved_ticker}, calling Phase4b",
+					flush=True,
+				)
 				web_result = await _fetch_tier2_web_data(
 					original_ticker,
 					str(resolved_ticker),
 				)
+				print(f"[DEBUG] web_result for {original_ticker}: {web_result}", flush=True)
 				if web_result and web_result.get("current_price"):
 					prices[original_ticker] = {
 						"current_price": web_result["current_price"],
