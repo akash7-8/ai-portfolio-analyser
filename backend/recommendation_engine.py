@@ -12,6 +12,17 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+NOISE_DOMAINS = {
+    "stackoverflow.com",
+    "wikipedia.org",
+    "w3schools.com",
+    "calculator",
+    "weather",
+    "math",
+}
+
+_QUERY_STOPWORDS = {"stock", "news", "sector", "india", "outlook", "2026", "usa"}
+
 
 # -- Groq SWOT (primary) -------------------------------------------------------
 
@@ -109,6 +120,7 @@ async def _fetch_news_snippets(queries: List[str]) -> List[Dict]:
                     {
                         "title": result.get("title"),
                         "content": result.get("content", ""),
+                        "url": result.get("url", ""),
                     }
                     for result in results
                 ]
@@ -117,7 +129,24 @@ async def _fetch_news_snippets(queries: List[str]) -> List[Dict]:
             return []
 
     nested_results = await asyncio.gather(*[_search(query) for query in queries])
-    return [item for sublist in nested_results for item in sublist]
+    filtered: List[Dict] = []
+    for query, snippets_for_query in zip(queries, nested_results):
+        for snippet in snippets_for_query:
+            if _is_relevant_snippet(snippet, query):
+                filtered.append(snippet)
+    return filtered
+
+
+def _is_relevant_snippet(snippet: dict, query: str) -> bool:
+    title = (snippet.get("title") or "").lower()
+    url = (snippet.get("url") or "").lower()
+
+    if any(domain in url for domain in NOISE_DOMAINS):
+        return False
+
+    query_words = set(query.lower().split()) - _QUERY_STOPWORDS
+    title_words = set(title.split())
+    return bool(query_words & title_words)
 
 
 def _build_groq_prompt(
