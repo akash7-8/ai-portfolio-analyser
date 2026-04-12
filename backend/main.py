@@ -105,7 +105,10 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	for ticker, asset in zip(normalized_tickers, payload.assets):
 		quantity_map[ticker] = quantity_map.get(ticker, 0.0) + float(asset.quantity)
 	data_warnings: list[str] = []
-	fetched_data = await _fetch_current_prices_for_tickers(list(quantity_map.keys()), data_warnings)
+	fetched_data, failed_tickers_count = await _fetch_current_prices_for_tickers(
+		list(quantity_map.keys()),
+		data_warnings,
+	)
 
 	total_value = sum(
 		float(fetched_data[ticker]["current_price"]) * quantity
@@ -234,7 +237,8 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	daily_change = compute_daily_change(weights_by_ticker, total_value, fetched_data)
 
 	# Before SWOT call, ensure resolver quota has cleared.
-	await asyncio.sleep(1)
+	sleep_duration = 3 if failed_tickers_count > 0 else 1
+	await asyncio.sleep(sleep_duration)
 	recommendation_engine = await generate_swot_with_groq(
 		diversification_score=diversification_score,
 		sector_exposure=sector_exposure,
@@ -652,7 +656,7 @@ def _fetch_returns_with_fallback(ticker: str) -> pd.DataFrame:
 async def _fetch_current_prices_for_tickers(
 	tickers: List[str],
 	data_warnings: list[str],
-) -> dict[str, dict[str, float]]:
+) -> tuple[dict[str, dict[str, float]], int]:
 	"""Fetch current prices with Tier-1 parallel fetch and Tier-2 batch resolver."""
 	tier1_results = await asyncio.gather(
 		*[_fetch_current_price_with_fallback(ticker) for ticker in tickers],
@@ -722,7 +726,7 @@ async def _fetch_current_prices_for_tickers(
 					f"Batch Tier-2 resolved {original_ticker} -> {resolved_ticker} but no current_price"
 				)
 
-	return prices
+	return prices, len(failed_tickers)
 
 
 async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame | None:
@@ -737,16 +741,21 @@ async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame | None
 		candidates.append(f"{clean_ticker}.NS")
 
 	for candidate in candidates:
-		try:
-			return get_current_price(candidate)
-		except Exception:
-			continue
+		for attempt in range(2):
+			try:
+				return get_current_price(candidate)
+			except Exception as exc:
+				error_text = str(exc)
+				if "401" in error_text or "Invalid Crumb" in error_text:
+					if attempt == 0:
+						await asyncio.sleep(2)
+						continue
+				break
 
 	# Only reach here if both Tier-1 candidates failed.
 	logger.warning(
-		"[main] All Tier-1 candidates failed for '%s', candidates tried: %s",
+		"[main] All Tier-1 candidates failed for '%s'",
 		clean_ticker,
-		candidates,
 	)
 	# Tier-2 is intentionally handled by batch resolver in _fetch_current_prices_for_tickers.
 	return None

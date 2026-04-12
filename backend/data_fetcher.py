@@ -8,7 +8,6 @@ import logging
 
 import pandas as pd
 import yfinance as yf
-from backend.ai_resolver import ai_resolve_ticker
 
 
 logger = logging.getLogger(__name__)
@@ -183,8 +182,7 @@ def _validate_ticker(ticker: str) -> str:
 async def get_ticker_metadata(ticker: str) -> dict:
 	"""
 	Fetches yfinance .info dict for a ticker.
-	Uses Tier-1 normalization with Tier-2 AI fallback.
-	Injects resolution metadata into the returned dict.
+	Returns default metadata when yfinance payload is unavailable.
 	"""
 	import yfinance as yf
 
@@ -200,8 +198,7 @@ async def get_ticker_metadata(ticker: str) -> dict:
 	if not isinstance(info, dict):
 		info = {}
 
-	# Determine if Tier-1 result is actually usable
-	# A valid yfinance response always has at least "regularMarketPrice" or "currentPrice"
+	# Determine if Tier-1 result is actually usable.
 	price_present = (
 		info.get("regularMarketPrice")
 		or info.get("currentPrice")
@@ -214,37 +211,16 @@ async def get_ticker_metadata(ticker: str) -> dict:
 		info["_resolution_source"] = "tier1"
 		return info
 
-	# Tier-1 info fetch failed or returned empty — invoke Tier-2
-	logger.info("[data_fetcher] Tier-1 info empty for '%s', invoking Tier-2 AI resolver", t1)
-	resolved = await ai_resolve_ticker(ticker)
-
-	if resolved and resolved.get("normalized_ticker"):
-		t2 = resolved["normalized_ticker"]
-		try:
-			info2 = yf.Ticker(t2).info or {}
-		except Exception:
-			info2 = {}
-
-		if not isinstance(info2, dict):
-			info2 = {}
-
-		info2["_normalized_ticker"] = t2
-		info2["_resolution_source"] = "tier2"
-
-		if not info2.get("sector") and resolved.get("sector"):
-			info2["sector"] = resolved["sector"]
-		if not info2.get("country") and resolved.get("country"):
-			info2["country"] = resolved["country"]
-		if resolved.get("asset_class"):
-			info2["_ai_asset_class"] = resolved["asset_class"]
-
-		return info2
-
-	# Fallback: return whatever Tier-1 gave us even if empty
-	logger.warning("[data_fetcher] Tier-2 failed for '%s', using Tier-1 result as fallback", ticker)
-	info["_normalized_ticker"] = t1
-	info["_resolution_source"] = "fallback"
-	return info
+	# Fallback: return default metadata and never call Groq from data_fetcher.
+	logger.warning("[data_fetcher] Tier-1 info unavailable for '%s', returning defaults", ticker)
+	return {
+		"sector": "Unknown",
+		"asset_class": "Unknown",
+		"exchange": None,
+		"current_price": None,
+		"_normalized_ticker": t1,
+		"_resolution_source": "default",
+	}
 
 
 if __name__ == "__main__":
