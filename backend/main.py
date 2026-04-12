@@ -670,15 +670,14 @@ async def _fetch_current_prices_for_tickers(
 		if isinstance(result, Exception) or result is None:
 			failed_tickers.append(ticker)
 			if isinstance(result, Exception):
-				data_warnings.append(f"Skipped Tier-1 price for {ticker}: {result}")
+				data_warnings.append(f"Tier-1 failed for {ticker}: {result}")
 			continue
 
-		if result.empty or "current_price" not in result.columns:
+		if isinstance(result, dict) and result.get("current_price") is not None:
+			prices[ticker] = {"current_price": float(result["current_price"]) }
+		else:
 			failed_tickers.append(ticker)
-			data_warnings.append(f"Skipped Tier-1 price for {ticker}: missing current_price")
-			continue
-
-		prices[ticker] = {"current_price": float(result["current_price"].iloc[-1])}
+			data_warnings.append(f"Tier-1 missing current_price for {ticker}")
 
 	if failed_tickers:
 		logger.info(
@@ -718,15 +717,19 @@ async def _fetch_current_prices_for_tickers(
 				retry_result = None
 
 			if retry_result is not None:
-				prices[original_ticker] = {
-					"current_price": float(retry_result["current_price"].iloc[-1])
-				}
-				logger.info(
-					"[main] Batch Tier-2 yfinance success: %s -> %s",
-					original_ticker,
-					resolved_ticker,
-				)
-			else:
+				if isinstance(retry_result, dict) and retry_result.get("current_price") is not None:
+					prices[original_ticker] = {
+						"current_price": float(retry_result["current_price"])
+					}
+					logger.info(
+						"[main] Batch Tier-2 yfinance success: %s -> %s",
+						original_ticker,
+						resolved_ticker,
+					)
+				else:
+					retry_result = None
+
+			if retry_result is None:
 				print(
 					f"[DEBUG] yfinance retry failed for {original_ticker}, resolved={resolved_ticker}, calling Phase4b",
 					flush=True,
@@ -754,7 +757,7 @@ async def _fetch_current_prices_for_tickers(
 	return prices, len(failed_tickers)
 
 
-async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame | None:
+async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | None:
 	"""Fetch current price for ticker using strict Tier-1 candidates only."""
 	clean_ticker = ticker.strip().upper()
 	if not clean_ticker:
@@ -768,7 +771,10 @@ async def _fetch_current_price_with_fallback(ticker: str) -> pd.DataFrame | None
 	for candidate in candidates:
 		for attempt in range(2):
 			try:
-				return get_current_price(candidate)
+				price_df = get_current_price(candidate)
+				if not price_df.empty and "current_price" in price_df.columns:
+					return {"current_price": float(price_df["current_price"].iloc[-1])}
+				break
 			except Exception as exc:
 				error_text = str(exc)
 				if "401" in error_text or "Invalid Crumb" in error_text:
