@@ -5,6 +5,7 @@ cannot validate a symbol from Tier-1 rule-based normalization.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
