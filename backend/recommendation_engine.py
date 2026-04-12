@@ -150,7 +150,7 @@ def _is_relevant_snippet(snippet: dict, query: str) -> bool:
         return False
 
     query_words = {
-        word for word in query.lower().split() if len(word) > 4 and word not in _QUERY_STOPWORDS
+        word for word in query.lower().split() if len(word) > 3 and word not in _QUERY_STOPWORDS
     }
     title_words = set(title.lower().split())
     return bool(query_words & title_words)
