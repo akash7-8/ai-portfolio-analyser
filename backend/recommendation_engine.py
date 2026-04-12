@@ -19,6 +19,11 @@ NOISE_DOMAINS = {
     "calculator",
     "weather",
     "math",
+    "consumerreports.org",
+    "reddit.com",
+    "quora.com",
+    "pinterest.com",
+    "youtube.com",
 }
 
 _QUERY_STOPWORDS = {"stock", "news", "sector", "india", "outlook", "2026", "usa"}
@@ -144,8 +149,10 @@ def _is_relevant_snippet(snippet: dict, query: str) -> bool:
     if any(domain in url for domain in NOISE_DOMAINS):
         return False
 
-    query_words = set(query.lower().split()) - _QUERY_STOPWORDS
-    title_words = set(title.split())
+    query_words = {
+        word for word in query.lower().split() if len(word) > 4 and word not in _QUERY_STOPWORDS
+    }
+    title_words = set(title.lower().split())
     return bool(query_words & title_words)
 
 
