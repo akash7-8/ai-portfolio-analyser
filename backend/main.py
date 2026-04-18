@@ -198,6 +198,15 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		portfolio_risk_volatility=portfolio_volatility,
 	)
 	annual_return = compute_portfolio_annual_return(weights_by_ticker, fetched_data)
+	phase4b_weighted_return = 0.0
+	phase4b_has_returns = False
+	for ticker, weight in weights_by_ticker.items():
+		phase4b_return = fetched_data.get(ticker, {}).get("_annual_return_1y")
+		if phase4b_return is not None:
+			phase4b_weighted_return += float(weight) * float(phase4b_return)
+			phase4b_has_returns = True
+	if phase4b_has_returns and annual_return == 0.08:
+		annual_return = float(phase4b_weighted_return) if phase4b_weighted_return != 0.0 else 0.08
 
 	sim_expected_return = _normalize_simulation_rate(float(annual_return))
 	if not (0.0 < sim_expected_return < 0.5):
@@ -726,6 +735,11 @@ async def _fetch_current_prices_for_tickers(
 				continue
 
 			try:
+				logger.info(
+					"[main] Retry fetch using resolved ticker: original=%s resolved=%s",
+					original_ticker,
+					resolved_ticker,
+				)
 				retry_result = await _fetch_current_price_with_fallback(str(resolved_ticker))
 			except Exception as exc:
 				logger.warning(
@@ -763,6 +777,7 @@ async def _fetch_current_prices_for_tickers(
 						"current_price": web_result["current_price"],
 						"_source": web_result.get("source", "web"),
 						"_confidence": web_result.get("confidence", "medium"),
+						"_annual_return_1y": web_result.get("annual_return_1y"),
 					}
 				else:
 					logger.warning(
@@ -840,6 +855,8 @@ async def _fetch_tier2_web_data(
 	from backend.ai_resolver import ai_web_search_price, fetch_finviz, scrape_screener_in
 
 	is_indian = resolved_ticker.endswith(".NS") or resolved_ticker.endswith(".BO")
+	is_us = "." not in resolved_ticker or resolved_ticker.endswith(".US")
+	is_global = not is_indian and not is_us
 
 	if is_indian:
 		result = await scrape_screener_in(resolved_ticker)
@@ -847,12 +864,13 @@ async def _fetch_tier2_web_data(
 			logger.info("[Phase4b] screener.in success for %s", original_ticker)
 			return result
 
-	if not is_indian:
+	if is_us:
 		result = await fetch_finviz(resolved_ticker)
 		if result and result.get("current_price"):
 			logger.info("[Phase4b] finviz success for %s", original_ticker)
 			return result
 
+	# Indian scraper failed, US finviz failed, or global ticker.
 	result = await ai_web_search_price(resolved_ticker)
 	if result and result.get("current_price"):
 		logger.info("[Phase4b] ai_web_search success for %s", original_ticker)
