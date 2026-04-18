@@ -7,10 +7,23 @@ from functools import lru_cache
 import logging
 
 import pandas as pd
+from curl_cffi import requests as curl_requests
 import yfinance as yf
 
 
 logger = logging.getLogger(__name__)
+
+
+# Shared browser-impersonating session for all yfinance calls.
+# Initialized once at module level and reused across all requests.
+_YF_SESSION: curl_requests.Session | None = None
+
+
+def _get_yf_session() -> curl_requests.Session:
+	global _YF_SESSION
+	if _YF_SESSION is None:
+		_YF_SESSION = curl_requests.Session(impersonate="chrome110")
+	return _YF_SESSION
 
 
 TICKER_ALIASES = {
@@ -40,7 +53,8 @@ def get_current_price(ticker: str) -> pd.DataFrame:
 		ValueError: If ticker is empty or no price is available.
 	"""
 	symbol = _validate_ticker(ticker)
-	history = yf.Ticker(symbol).history(period="1d", interval="1m")
+	session = _get_yf_session()
+	history = yf.Ticker(symbol, session=session).history(period="1d", interval="1m")
 
 	if history.empty:
 		raise ValueError(f"No recent pricing data found for ticker '{symbol}'")
@@ -143,7 +157,7 @@ def normalize_ticker(ticker: str) -> str:
 def _ticker_has_price_direct(ticker: str) -> bool:
 	"""Return True when yfinance metadata includes a usable market price."""
 	try:
-		info = yf.Ticker(ticker).info
+		info = yf.Ticker(ticker, session=_get_yf_session()).info
 	except Exception:  # noqa: BLE001 - network/metadata access is best effort
 		return False
 
@@ -191,7 +205,7 @@ async def get_ticker_metadata(ticker: str) -> dict:
 
 	# Attempt yfinance full info fetch with Tier-1 normalized ticker
 	try:
-		info = yf.Ticker(t1).info or {}
+		info = yf.Ticker(t1, session=_get_yf_session()).info or {}
 	except Exception:
 		info = {}
 

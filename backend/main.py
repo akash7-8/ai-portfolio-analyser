@@ -105,6 +105,20 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	for ticker, asset in zip(normalized_tickers, payload.assets):
 		quantity_map[ticker] = quantity_map.get(ticker, 0.0) + float(asset.quantity)
 	data_warnings: list[str] = []
+
+	# Pre-warm yfinance session and crumb before parallel price fetches.
+	# This ensures a single valid crumb is established before concurrent
+	# requests begin, preventing race conditions on crumb initialization.
+	try:
+		from data_fetcher import _get_yf_session
+		import yfinance as yf
+
+		_prewarm_ticker = yf.Ticker("AAPL", session=_get_yf_session())
+		_ = _prewarm_ticker.fast_info
+		logger.info("[main] yfinance session pre-warmed successfully")
+	except Exception as exc:
+		logger.warning("[main] yfinance pre-warm failed (non-fatal): %s", exc)
+
 	fetched_data, failed_tickers_count = await _fetch_current_prices_for_tickers(
 		list(quantity_map.keys()),
 		data_warnings,
@@ -658,8 +672,13 @@ async def _fetch_current_prices_for_tickers(
 	data_warnings: list[str],
 ) -> tuple[dict[str, dict[str, object]], int]:
 	"""Fetch current prices with Tier-1 parallel fetch and Tier-2 batch resolver."""
+
+	async def _staggered_fetch(ticker: str, index: int) -> dict | None:
+		await asyncio.sleep(index * 0.1)
+		return await _fetch_current_price_with_fallback(ticker)
+
 	tier1_results = await asyncio.gather(
-		*[_fetch_current_price_with_fallback(ticker) for ticker in tickers],
+		*[_staggered_fetch(ticker, idx) for idx, ticker in enumerate(tickers)],
 		return_exceptions=True,
 	)
 
@@ -758,7 +777,11 @@ async def _fetch_current_prices_for_tickers(
 
 
 async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | None:
-	"""Fetch current price for ticker using strict Tier-1 candidates only."""
+	"""Fetch current price for ticker using strict Tier-1 candidates only.
+
+	Retries with exponential backoff on 401, Invalid Crumb, and 429 errors.
+	Tier-2 batch resolution is handled upstream in _fetch_current_prices_for_tickers.
+	"""
 	clean_ticker = ticker.strip().upper()
 	if not clean_ticker:
 		return None
@@ -769,19 +792,36 @@ async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | 
 		candidates.append(f"{clean_ticker}.NS")
 
 	for candidate in candidates:
-		for attempt in range(2):
+		for attempt in range(3):
 			try:
 				price_df = get_current_price(candidate)
 				if not price_df.empty and "current_price" in price_df.columns:
 					return {"current_price": float(price_df["current_price"].iloc[-1])}
-				break
+				break  # non-retriable failure (empty data)
 			except Exception as exc:
 				error_text = str(exc)
-				if "401" in error_text or "Invalid Crumb" in error_text:
-					if attempt == 0:
-						await asyncio.sleep(2)
-						continue
-				break
+				is_retriable = any(
+					marker in error_text
+					for marker in [
+						"401",
+						"Invalid Crumb",
+						"429",
+						"Too Many Requests",
+						"Rate limited",
+					]
+				)
+				if is_retriable and attempt < 2:
+					wait_seconds = 2 ** (attempt + 1)
+					logger.warning(
+						"[main] Retriable error for '%s' (attempt %d): %s - retrying in %ds",
+						candidate,
+						attempt + 1,
+						error_text[:80],
+						wait_seconds,
+					)
+					await asyncio.sleep(wait_seconds)
+					continue
+				break  # non-retriable or exhausted retries
 
 	# Only reach here if both Tier-1 candidates failed.
 	logger.warning(
