@@ -110,7 +110,7 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	# This ensures a single valid crumb is established before concurrent
 	# requests begin, preventing race conditions on crumb initialization.
 	try:
-		from data_fetcher import _get_yf_session
+		from backend.data_fetcher import _get_yf_session
 		import yfinance as yf
 
 		_prewarm_ticker = yf.Ticker("AAPL", session=_get_yf_session())

@@ -134,6 +134,8 @@ async def _fetch_news_snippets(queries: List[str]) -> List[Dict]:
             return []
 
     nested_results = await asyncio.gather(*[_search(query) for query in queries])
+    flat = [snippet for snippets_for_query in nested_results for snippet in snippets_for_query]
+    logger.info("[SWOT news] Raw snippets before filter: %s", [snippet.get("title") for snippet in flat])
     filtered: List[Dict] = []
     for query, snippets_for_query in zip(queries, nested_results):
         for snippet in snippets_for_query:

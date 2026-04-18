@@ -228,6 +228,13 @@ Return ONLY a valid JSON array, no preamble, no markdown fences:
 
 Rules:
 - For Indian stocks use .NS suffix for NSE, .BO for BSE
+- For UK/LSE stocks use .L suffix (BARC.L, STAN.L, HSBA.L)
+- For Hong Kong use .HK suffix
+- For Japan use .T suffix
+- For Germany use .DE suffix
+- For France use .PA suffix
+- Only use .NS for confirmed NSE India stocks
+- Do NOT default to .NS for non-Indian companies
 - If you cannot confidently resolve a ticker, set normalized_ticker to null
 - Return one object per input ticker, in the same order
 - Return ONLY the JSON array"""
