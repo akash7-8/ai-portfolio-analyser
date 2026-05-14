@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from functools import lru_cache
+import asyncio
 import logging
 
 import pandas as pd
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Shared browser-impersonating session for all yfinance calls.
 # Initialized once at module level and reused across all requests.
 _YF_SESSION: curl_requests.Session | None = None
+_crumb_lock = asyncio.Lock()
 
 
 def _get_yf_session() -> curl_requests.Session:
@@ -24,6 +26,24 @@ def _get_yf_session() -> curl_requests.Session:
 	if _YF_SESSION is None:
 		_YF_SESSION = curl_requests.Session(impersonate="chrome110")
 	return _YF_SESSION
+
+
+async def refresh_crumb() -> None:
+	"""Refresh Yahoo Finance crumb using the shared session."""
+	async with _crumb_lock:
+		try:
+			session = _get_yf_session()
+			resp = session.get(
+				"https://query1.finance.yahoo.com/v1/test/getcrumb",
+				timeout=10,
+			)
+			if resp.status_code != 200:
+				logger.warning("[data_fetcher] Crumb refresh status: %s", resp.status_code)
+				return
+			_ = resp.text
+			logger.info("[data_fetcher] Crumb refreshed")
+		except Exception as exc:  # noqa: BLE001 - best effort crumb refresh
+			logger.warning("[data_fetcher] Crumb refresh failed: %s", exc)
 
 
 TICKER_ALIASES = {
