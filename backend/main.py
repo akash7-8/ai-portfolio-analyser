@@ -803,10 +803,11 @@ async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | 
 	if not clean_ticker:
 		return None
 
-	# Tier-1: try raw symbol then .NS suffix
-	candidates = [clean_ticker]
-	if "." not in clean_ticker:
-		candidates.append(f"{clean_ticker}.NS")
+	# Tier-1: prefer .NS for bare tickers
+	if "." in clean_ticker:
+		candidates = [clean_ticker]
+	else:
+		candidates = [f"{clean_ticker}.NS", clean_ticker]
 
 	for candidate in candidates:
 		for attempt in range(3):
