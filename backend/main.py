@@ -20,7 +20,6 @@ from backend.data_fetcher import (
 	get_historical_returns,
 	get_ticker_metadata,
 	normalize_ticker,
-	refresh_crumb,
 )
 from backend.diversification import calculate_diversification
 from backend.portfolio_engine import calculate_portfolio_score
@@ -120,7 +119,7 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	except Exception as exc:
 		logger.warning("[main] yfinance pre-warm failed (non-fatal): %s", exc)
 
-	fetched_data, failed_tickers_count, batch_results = await _fetch_current_prices_for_tickers(
+	fetched_data, failed_tickers_count = await _fetch_current_prices_for_tickers(
 		list(quantity_map.keys()),
 		data_warnings,
 	)
@@ -308,10 +307,7 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		"riskFreeRate": risk_free_rate,
 	}
 
-	asset_class_exposure = await _build_asset_class_exposure(
-		normalized_asset_entries,
-		batch_results=batch_results,
-	)
+	asset_class_exposure = await _build_asset_class_exposure(normalized_asset_entries)
 	diversification_block = {
 		"score": round(diversification_score, 2),
 		"assetClasses": asset_class_exposure,
@@ -577,7 +573,6 @@ def _normalize_tickers_parallel(raw_tickers: List[str]) -> list[str]:
 
 async def _build_asset_class_exposure(
 	asset_entries: List[dict[str, float | str]],
-	batch_results: dict[str, dict] | None = None,
 ) -> list[dict[str, float | str]]:
 	"""Build simple asset-class exposure grouping for frontend charts."""
 	groups: dict[str, float] = {}
@@ -585,13 +580,8 @@ async def _build_asset_class_exposure(
 		ticker = str(entry["ticker"])
 		weight = float(entry["weight"])
 		normalized = normalize_ticker(ticker)
-		resolved_ticker = normalized
-		if batch_results:
-			resolution = batch_results.get(ticker)
-			if resolution and resolution.get("normalized_ticker"):
-				resolved_ticker = str(resolution["normalized_ticker"])
-		ticker_info_dict = await get_ticker_metadata(resolved_ticker)
-		asset_class = await infer_asset_class(resolved_ticker, info=ticker_info_dict)
+		ticker_info_dict = await get_ticker_metadata(normalized)
+		asset_class = await infer_asset_class(normalized, info=ticker_info_dict)
 		groups[asset_class] = groups.get(asset_class, 0.0) + weight
 
 	asset_class_map = {
@@ -689,7 +679,7 @@ def _fetch_returns_with_fallback(ticker: str) -> pd.DataFrame:
 async def _fetch_current_prices_for_tickers(
 	tickers: List[str],
 	data_warnings: list[str],
-) -> tuple[dict[str, dict[str, object]], int, dict[str, dict]]:
+) -> tuple[dict[str, dict[str, object]], int]:
 	"""Fetch current prices with Tier-1 parallel fetch and Tier-2 batch resolver."""
 
 	async def _staggered_fetch(ticker: str, index: int) -> dict | None:
@@ -718,7 +708,6 @@ async def _fetch_current_prices_for_tickers(
 			failed_tickers.append(ticker)
 			data_warnings.append(f"Tier-1 missing current_price for {ticker}")
 
-	batch_results: dict[str, dict] = {}
 	if failed_tickers:
 		logger.info(
 			"[main] %d tickers failed Tier-1, batch resolving: %s",
@@ -801,7 +790,7 @@ async def _fetch_current_prices_for_tickers(
 						f"Phase4b failed for {original_ticker} after resolved ticker {resolved_ticker}"
 					)
 
-	return prices, len(failed_tickers), batch_results
+	return prices, len(failed_tickers)
 
 
 async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | None:
@@ -821,9 +810,7 @@ async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | 
 		candidates = [f"{clean_ticker}.NS", clean_ticker]
 
 	for candidate in candidates:
-		attempt = 0
-		crumb_refreshed = False
-		while attempt < 3:
+		for attempt in range(3):
 			try:
 				price_df = get_current_price(candidate)
 				if not price_df.empty and "current_price" in price_df.columns:
@@ -831,11 +818,6 @@ async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | 
 				break  # non-retriable failure (empty data)
 			except Exception as exc:
 				error_text = str(exc)
-				is_crumb_error = "Invalid Crumb" in error_text or "401" in error_text
-				if is_crumb_error and not crumb_refreshed:
-					await refresh_crumb()
-					crumb_refreshed = True
-					continue
 				is_retriable = any(
 					marker in error_text
 					for marker in [
@@ -856,7 +838,6 @@ async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | 
 						wait_seconds,
 					)
 					await asyncio.sleep(wait_seconds)
-					attempt += 1
 					continue
 				break  # non-retriable or exhausted retries
 

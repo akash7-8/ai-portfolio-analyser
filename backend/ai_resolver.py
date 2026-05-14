@@ -233,14 +233,9 @@ Return ONLY a valid JSON array, no preamble, no markdown fences:
   }}
 ]
 
-Few-shot examples:
-- input: "STAN" -> normalized_ticker: "STAN.L", exchange: "LSE", country: "UK"
-- input: "BARC" -> normalized_ticker: "BARC.L", exchange: "LSE", country: "UK"
-
 Rules:
 - For Indian stocks use .NS suffix for NSE, .BO for BSE
 - For UK/LSE stocks use .L suffix (BARC.L, STAN.L, HSBA.L)
-- If a ticker could be a major UK bank or global financial institution listed on the London Stock Exchange, append .L. STAN is Standard Chartered PLC, LSE ticker STAN.L. BARC is Barclays PLC, LSE ticker BARC.L.
 - For Hong Kong use .HK suffix
 - For Japan use .T suffix
 - For Germany use .DE suffix
