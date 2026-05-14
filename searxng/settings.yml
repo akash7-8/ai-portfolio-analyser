@@ -1,15 +1,11 @@
 use_default_settings: true
 server:
-  secret_key: "change-this-to-random-string"
+  secret_key: "changethis123randomstring"
   limiter: false
   image_proxy: false
 search:
   safe_search: 0
   default_lang: "en"
-engines:
-  - name: google
-    engine: google
-    shortcut: g
-  - name: bing
-    engine: bing
-    shortcut: b
+  formats:
+    - html
+    - json

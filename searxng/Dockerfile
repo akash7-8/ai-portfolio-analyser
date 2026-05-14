@@ -1,4 +1,4 @@
 FROM searxng/searxng:latest
-ENV SEARXNG_SECRET_KEY=changethis123randomstring
-ENV SEARXNG_LIMITER=false
+COPY settings.yml /etc/searxng/settings.yml
+RUN chmod 644 /etc/searxng/settings.yml
 EXPOSE 8080
