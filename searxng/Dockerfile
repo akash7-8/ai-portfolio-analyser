@@ -1,0 +1,4 @@
+FROM searxng/searxng:latest
+ENV SEARXNG_SECRET_KEY=changethis123randomstring
+ENV SEARXNG_LIMITER=false
+EXPOSE 8080

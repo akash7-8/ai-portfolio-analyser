@@ -684,7 +684,8 @@ async def _fetch_current_prices_for_tickers(
 
 	async def _staggered_fetch(ticker: str, index: int) -> dict | None:
 		await asyncio.sleep(index * 0.1)
-		return await _fetch_current_price_with_fallback(ticker)
+		normalized_ticker = _normalize_input_ticker(ticker)
+		return await _fetch_current_price_with_fallback(normalized_ticker)
 
 	tier1_results = await asyncio.gather(
 		*[_staggered_fetch(ticker, idx) for idx, ticker in enumerate(tickers)],
@@ -720,6 +721,7 @@ async def _fetch_current_prices_for_tickers(
 		print(f"[DEBUG] batch_results: {batch_results}", flush=True)
 
 		for original_ticker in failed_tickers:
+			logger.info("[main] Processing batch result for: %s", original_ticker)
 			resolution = batch_results.get(original_ticker)
 			if not resolution:
 				logger.warning(
