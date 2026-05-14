@@ -26,6 +26,23 @@ def _get_yf_session() -> curl_requests.Session:
 	return _YF_SESSION
 
 
+async def refresh_crumb() -> None:
+	"""Refresh Yahoo Finance crumb using the shared session."""
+	async with _crumb_lock:
+		logger.info("[crumb] Refreshing crumb due to 401")
+		try:
+			session = _get_yf_session()
+			resp = session.get(
+				"https://query1.finance.yahoo.com/v1/test/getcrumb",
+				timeout=10,
+			)
+			if resp.status_code != 200:
+				logger.warning("[data_fetcher] Crumb refresh status: %s", resp.status_code)
+				return
+			_ = resp.text
+			logger.info("[crumb] Crumb refreshed successfully")
+		except Exception as exc:  # noqa: BLE001 - best effort crumb refresh
+			logger.warning("[crumb] Crumb refresh failed: %s", exc)
 TICKER_ALIASES = {
 	"HUL": "HINDUNILVR",
 	"HDFC": "HDFCBANK",
@@ -37,7 +54,7 @@ TICKER_ALIASES = {
 }
 
 
-def get_current_price(ticker: str) -> pd.DataFrame:
+async def get_current_price(ticker: str) -> pd.DataFrame:
 	"""Fetch the latest market price for a ticker.
 
 	Args:
@@ -54,7 +71,22 @@ def get_current_price(ticker: str) -> pd.DataFrame:
 	"""
 	symbol = _validate_ticker(ticker)
 	session = _get_yf_session()
-	history = yf.Ticker(symbol, session=session).history(period="1d", interval="1m")
+
+	def _fetch_history() -> pd.DataFrame:
+		return yf.Ticker(symbol, session=session).history(period="1d", interval="1m")
+
+	crumb_refreshed = False
+	try:
+		history = _fetch_history()
+	except Exception as exc:
+		error_text = str(exc)
+		if any(marker in error_text for marker in ["401", "Invalid Crumb", "Unauthorized"]):
+			await refresh_crumb()
+			crumb_refreshed = True
+		else:
+			raise
+		if crumb_refreshed:
+			history = _fetch_history()
 
 	if history.empty:
 		raise ValueError(f"No recent pricing data found for ticker '{symbol}'")
@@ -206,8 +238,16 @@ async def get_ticker_metadata(ticker: str) -> dict:
 	# Attempt yfinance full info fetch with Tier-1 normalized ticker
 	try:
 		info = yf.Ticker(t1, session=_get_yf_session()).info or {}
-	except Exception:
-		info = {}
+	except Exception as exc:
+		error_text = str(exc)
+		if any(marker in error_text for marker in ["401", "Invalid Crumb", "Unauthorized"]):
+			await refresh_crumb()
+			try:
+				info = yf.Ticker(t1, session=_get_yf_session()).info or {}
+			except Exception:
+				info = {}
+		else:
+			info = {}
 
 	if not isinstance(info, dict):
 		info = {}
@@ -239,6 +279,6 @@ async def get_ticker_metadata(ticker: str) -> dict:
 
 if __name__ == "__main__":
 	# Example usage
-	print(get_current_price("AAPL").head())
+	print(asyncio.run(get_current_price("AAPL")).head())
 	print(get_historical_returns("AAPL").head())
 

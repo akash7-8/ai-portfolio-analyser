@@ -812,7 +812,7 @@ async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | 
 	for candidate in candidates:
 		for attempt in range(3):
 			try:
-				price_df = get_current_price(candidate)
+				price_df = await get_current_price(candidate)
 				if not price_df.empty and "current_price" in price_df.columns:
 					return {"current_price": float(price_df["current_price"].iloc[-1])}
 				break  # non-retriable failure (empty data)
