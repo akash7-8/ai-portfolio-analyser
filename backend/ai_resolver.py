@@ -14,6 +14,11 @@ from typing import Optional
 import httpx
 
 logger = logging.getLogger(__name__)
+
+SEARXNG_HEADERS = {
+    "X-Forwarded-For": "1.2.3.4",
+    "X-Real-IP": "1.2.3.4",
+}
 if not logger.handlers:
     handler = logging.StreamHandler()
     handler.setLevel(logging.DEBUG)
@@ -48,6 +53,7 @@ async def _searxng_search(query: str, num_results: int = 5) -> list[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{searxng_url}/search",
+                headers=SEARXNG_HEADERS,
                 params={
                     "q": query,
                     "format": "json",
@@ -187,6 +193,7 @@ async def ai_resolve_tickers_batch(tickers: list[str]) -> dict[str, dict]:
             async with httpx.AsyncClient(timeout=8) as client:
                 resp = await client.get(
                     f"{searxng_base_url}/search",
+                    headers=SEARXNG_HEADERS,
                     params={
                         "q": f"{ticker} NSE BSE stock ticker symbol",
                         "format": "json",
@@ -388,6 +395,7 @@ async def ai_web_search_price(ticker: str, context_hints: dict = None) -> dict |
             try:
                 resp = await client.get(
                     f"{searxng_base_url}/search",
+                    headers=SEARXNG_HEADERS,
                     params={"q": query, "format": "json"},
                 )
                 resp.raise_for_status()

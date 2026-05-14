@@ -12,6 +12,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+SEARXNG_HEADERS = {
+    "X-Forwarded-For": "1.2.3.4",
+    "X-Real-IP": "1.2.3.4",
+}
+
 NOISE_DOMAINS = {
     "stackoverflow.com",
     "wikipedia.org",
@@ -117,6 +122,7 @@ async def _fetch_news_snippets(queries: List[str]) -> List[Dict]:
             async with httpx.AsyncClient(timeout=8) as client:
                 resp = await client.get(
                     f"{base_url}/search",
+                    headers=SEARXNG_HEADERS,
                     params={"q": query, "format": "json", "engines": "google,bing"},
                 )
                 resp.raise_for_status()
