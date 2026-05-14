@@ -97,7 +97,10 @@ def _build_searxng_queries(
     for holding in top_holdings:
         ticker = str(holding.get("ticker", "")).strip()
         if ticker:
-            queries.append(f"{ticker} stock news 2026")
+            queries.append(
+                f"{ticker} stock price analysis forecast 2026 site:reuters.com OR "
+                "site:bloomberg.com OR site:moneycontrol.com OR site:economictimes.com"
+            )
 
     top_sectors = sorted(
         sector_exposure.items(),
@@ -106,7 +109,7 @@ def _build_searxng_queries(
     )[:2]
     for sector, _ in top_sectors:
         if sector:
-            queries.append(f"{sector} sector India outlook 2026")
+            queries.append(f"{sector} sector stocks outlook India 2026")
 
     return queries
 
@@ -123,7 +126,12 @@ async def _fetch_news_snippets(queries: List[str]) -> List[Dict]:
                 resp = await client.get(
                     f"{base_url}/search",
                     headers=SEARXNG_HEADERS,
-                    params={"q": query, "format": "json", "engines": "google,bing"},
+                    params={
+                        "q": query,
+                        "format": "json",
+                        "engines": "google,bing,duckduckgo",
+                        "categories": "news",
+                    },
                 )
                 resp.raise_for_status()
                 results = resp.json().get("results", [])[:3]
