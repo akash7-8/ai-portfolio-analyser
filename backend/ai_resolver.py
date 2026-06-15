@@ -19,6 +19,23 @@ SEARXNG_HEADERS = {
     "X-Forwarded-For": "1.2.3.4",
     "X-Real-IP": "1.2.3.4",
 }
+
+KNOWN_TICKERS = {
+    "STAN": {
+        "normalized_ticker": "STAN.L",
+        "exchange": "LSE",
+        "country": "United Kingdom",
+        "sector": "Financials",
+        "asset_class": "UK Equities",
+    },
+    "BARC": {
+        "normalized_ticker": "BARC.L",
+        "exchange": "LSE",
+        "country": "United Kingdom",
+        "sector": "Financials",
+        "asset_class": "UK Equities",
+    },
+}
 if not logger.handlers:
     handler = logging.StreamHandler()
     handler.setLevel(logging.DEBUG)
@@ -182,9 +199,28 @@ async def ai_resolve_tickers_batch(tickers: list[str]) -> dict[str, dict]:
     groq_api_key = os.environ.get("GROQ_API_KEY", "")
     searxng_base_url = os.environ.get("SEARXNG_BASE_URL", "").rstrip("/")
 
+    result: dict[str, dict] = {}
+    unresolved_tickers: list[str] = []
+
+    for ticker in tickers:
+        clean_ticker = ticker.strip().upper()
+        known_resolution = KNOWN_TICKERS.get(clean_ticker)
+        if known_resolution:
+            result[ticker] = {"input": ticker, **known_resolution}
+            logger.info(
+                "[AI Resolver Batch] Using known resolution for %s -> %s",
+                ticker,
+                known_resolution["normalized_ticker"],
+            )
+        else:
+            unresolved_tickers.append(ticker)
+
+    if not unresolved_tickers:
+        return result
+
     if not groq_api_key:
         logger.warning("[AI Resolver Batch] GROQ_API_KEY not set, skipping batch resolve.")
-        return {}
+        return result
 
     async def _search_one(ticker: str) -> tuple[str, list[str]]:
         if not searxng_base_url:
@@ -210,7 +246,7 @@ async def ai_resolve_tickers_batch(tickers: list[str]) -> dict[str, dict]:
             logger.warning("[AI Resolver Batch] SearXNG failed for %s: %s", ticker, exc)
             return ticker, []
 
-    search_results = await asyncio.gather(*[_search_one(ticker) for ticker in tickers])
+    search_results = await asyncio.gather(*[_search_one(ticker) for ticker in unresolved_tickers])
 
     ticker_context_block = ""
     for ticker, snippets in search_results:
@@ -273,7 +309,6 @@ Rules:
                         raw = raw[4:]
                 parsed = json.loads(raw)
 
-                result: dict[str, dict] = {}
                 for item in parsed:
                     input_ticker = item.get("input")
                     if input_ticker and item.get("normalized_ticker"):
@@ -282,7 +317,7 @@ Rules:
                 logger.info(
                     "[AI Resolver Batch] Resolved %d/%d tickers in one Groq call.",
                     len(result),
-                    len(tickers),
+                    len(unresolved_tickers),
                 )
                 return result
         except (json.JSONDecodeError, KeyError) as exc:
@@ -295,7 +330,7 @@ Rules:
             logger.error("[AI Resolver Batch] Groq call failed: %s", exc)
             return {}
 
-    return {}
+    return result
 
 
 async def scrape_screener_in(ticker: str) -> dict | None:

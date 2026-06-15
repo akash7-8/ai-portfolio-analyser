@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from math import sqrt
@@ -20,6 +21,7 @@ from backend.data_fetcher import (
 	get_historical_returns,
 	get_ticker_metadata,
 	normalize_ticker,
+	refresh_crumb,
 )
 from backend.diversification import calculate_diversification
 from backend.portfolio_engine import calculate_portfolio_score
@@ -85,6 +87,45 @@ app.add_middleware(
 	allow_methods=["*"],
 	allow_headers=["*"],
 )
+
+_crumb_refresh_task: asyncio.Task | None = None
+_crumb_refresh_stop = asyncio.Event()
+
+
+async def _run_crumb_refresh_loop() -> None:
+	"""Refresh the Yahoo crumb periodically to keep yfinance sessions valid."""
+	while not _crumb_refresh_stop.is_set():
+		try:
+			await asyncio.sleep(55 * 60)
+			if _crumb_refresh_stop.is_set():
+				break
+			await refresh_crumb()
+		except asyncio.CancelledError:
+			raise
+		except Exception as exc:  # noqa: BLE001 - background maintenance should not crash app
+			logger.warning("[crumb] Background refresh failed: %s", exc)
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+	"""Warm up the crumb once and start the periodic refresh task."""
+	global _crumb_refresh_task
+	_crumb_refresh_stop.clear()
+	await refresh_crumb()
+	if _crumb_refresh_task is None or _crumb_refresh_task.done():
+		_crumb_refresh_task = asyncio.create_task(_run_crumb_refresh_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+	"""Stop the periodic crumb refresh task cleanly."""
+	global _crumb_refresh_task
+	_crumb_refresh_stop.set()
+	if _crumb_refresh_task is not None:
+		_crumb_refresh_task.cancel()
+		with suppress(asyncio.CancelledError):
+			await _crumb_refresh_task
+		_crumb_refresh_task = None
 
 
 @app.get("/health")
