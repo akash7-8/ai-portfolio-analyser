@@ -273,10 +273,6 @@ async def _infer_asset_class_cached(ticker: str) -> str:
         if country in country_map:
             return country_map[country]
 
-    # No suffix, no metadata match — assume US (bare tickers with no suffix are almost always US)
-    if "." not in clean_ticker:
-        return "US Equities"
-
     return "Unknown"
 
 
