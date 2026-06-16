@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from functools import lru_cache
 import logging
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Shared browser-impersonating session for all yfinance calls.
 # Initialized once at module level and reused across all requests.
 _YF_SESSION: curl_requests.Session | None = None
+_crumb_lock = asyncio.Lock()
 
 
 def _get_yf_session() -> curl_requests.Session:
