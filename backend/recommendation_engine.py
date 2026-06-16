@@ -147,7 +147,19 @@ async def _fetch_news_snippets(queries: List[str]) -> List[Dict]:
             logger.warning("SearXNG query failed for '%s': %s", query, exc)
             return []
 
-    nested_results = await asyncio.gather(*[_search(query) for query in queries])
+    semaphore = asyncio.Semaphore(2)
+
+    async def _limited_search(query: str) -> List[Dict]:
+        async with semaphore:
+            return await _search(query)
+
+    search_tasks: list[asyncio.Task[List[Dict]]] = []
+    for index, query in enumerate(queries):
+        if index > 0:
+            await asyncio.sleep(1.0)
+        search_tasks.append(asyncio.create_task(_limited_search(query)))
+
+    nested_results = await asyncio.gather(*search_tasks)
     flat = [snippet for snippets_for_query in nested_results for snippet in snippets_for_query]
     logger.info("[SWOT news] Raw snippets before filter: %s", [snippet.get("title") for snippet in flat])
     filtered: List[Dict] = []
