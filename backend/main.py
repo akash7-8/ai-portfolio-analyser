@@ -160,7 +160,7 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 	except Exception as exc:
 		logger.warning("[main] yfinance pre-warm failed (non-fatal): %s", exc)
 
-	fetched_data, failed_tickers_count = await _fetch_current_prices_for_tickers(
+	fetched_data, failed_tickers_count, batch_results = await _fetch_current_prices_for_tickers(
 		list(quantity_map.keys()),
 		data_warnings,
 	)
@@ -348,7 +348,10 @@ async def analyze_portfolio(payload: AnalyzePortfolioRequest) -> dict:
 		"riskFreeRate": risk_free_rate,
 	}
 
-	asset_class_exposure = await _build_asset_class_exposure(normalized_asset_entries)
+	asset_class_exposure = await _build_asset_class_exposure(
+		normalized_asset_entries,
+		batch_results=batch_results,
+	)
 	diversification_block = {
 		"score": round(diversification_score, 2),
 		"assetClasses": asset_class_exposure,
@@ -614,6 +617,7 @@ def _normalize_tickers_parallel(raw_tickers: List[str]) -> list[str]:
 
 async def _build_asset_class_exposure(
 	asset_entries: List[dict[str, float | str]],
+	batch_results: dict[str, dict] | None = None,
 ) -> list[dict[str, float | str]]:
 	"""Build simple asset-class exposure grouping for frontend charts."""
 	groups: dict[str, float] = {}
@@ -621,8 +625,13 @@ async def _build_asset_class_exposure(
 		ticker = str(entry["ticker"])
 		weight = float(entry["weight"])
 		normalized = normalize_ticker(ticker)
-		ticker_info_dict = await get_ticker_metadata(normalized)
-		asset_class = await infer_asset_class(normalized, info=ticker_info_dict)
+		resolved_ticker = normalized
+		if batch_results:
+			resolution = batch_results.get(ticker)
+			if resolution and resolution.get("normalized_ticker"):
+				resolved_ticker = str(resolution["normalized_ticker"])
+		ticker_info_dict = await get_ticker_metadata(resolved_ticker)
+		asset_class = await infer_asset_class(resolved_ticker, info=ticker_info_dict)
 		groups[asset_class] = groups.get(asset_class, 0.0) + weight
 
 	asset_class_map = {
@@ -720,7 +729,7 @@ def _fetch_returns_with_fallback(ticker: str) -> pd.DataFrame:
 async def _fetch_current_prices_for_tickers(
 	tickers: List[str],
 	data_warnings: list[str],
-) -> tuple[dict[str, dict[str, object]], int]:
+) -> tuple[dict[str, dict[str, object]], int, dict[str, dict]]:
 	"""Fetch current prices with Tier-1 parallel fetch and Tier-2 batch resolver."""
 
 	async def _staggered_fetch(ticker: str, index: int) -> dict | None:
@@ -749,6 +758,7 @@ async def _fetch_current_prices_for_tickers(
 			failed_tickers.append(ticker)
 			data_warnings.append(f"Tier-1 missing current_price for {ticker}")
 
+	batch_results: dict[str, dict] = {}
 	if failed_tickers:
 		logger.info(
 			"[main] %d tickers failed Tier-1, batch resolving: %s",
@@ -831,7 +841,7 @@ async def _fetch_current_prices_for_tickers(
 						f"Phase4b failed for {original_ticker} after resolved ticker {resolved_ticker}"
 					)
 
-	return prices, len(failed_tickers)
+	return prices, len(failed_tickers), batch_results
 
 
 async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | None:
