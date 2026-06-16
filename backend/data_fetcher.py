@@ -32,19 +32,31 @@ async def refresh_crumb() -> None:
 	"""Refresh Yahoo Finance crumb using the shared session."""
 	async with _crumb_lock:
 		logger.info("[crumb] Refreshing crumb due to 401")
-		try:
-			session = _get_yf_session()
-			resp = session.get(
-				"https://query1.finance.yahoo.com/v1/test/getcrumb",
-				timeout=10,
-			)
-			if resp.status_code != 200:
+		backoff_seconds = 2
+		for attempt in range(3):
+			try:
+				session = _get_yf_session()
+				resp = session.get(
+					"https://query1.finance.yahoo.com/v1/test/getcrumb",
+					timeout=10,
+				)
+				if resp.status_code == 200:
+					_ = resp.text
+					logger.info("[crumb] Crumb refreshed successfully")
+					return
 				logger.warning("[data_fetcher] Crumb refresh status: %s", resp.status_code)
-				return
-			_ = resp.text
-			logger.info("[crumb] Crumb refreshed successfully")
-		except Exception as exc:  # noqa: BLE001 - best effort crumb refresh
-			logger.warning("[crumb] Crumb refresh failed: %s", exc)
+			except Exception as exc:  # noqa: BLE001 - best effort crumb refresh
+				logger.warning("[crumb] Crumb refresh failed: %s", exc)
+			if attempt < 2:
+				await asyncio.sleep(backoff_seconds)
+				backoff_seconds *= 2
+				continue
+			return
+
+
+def _is_crumb_error(error_text: str) -> bool:
+	"""Return True when an exception message indicates a crumb-related failure."""
+	return any(marker in error_text for marker in ["401", "Invalid Crumb", "Unauthorized"])
 TICKER_ALIASES = {
 	"HUL": "HINDUNILVR",
 	"HDFC": "HDFCBANK",
@@ -77,18 +89,20 @@ async def get_current_price(ticker: str) -> pd.DataFrame:
 	def _fetch_history() -> pd.DataFrame:
 		return yf.Ticker(symbol, session=session).history(period="1d", interval="1m")
 
-	crumb_refreshed = False
-	try:
-		history = _fetch_history()
-	except Exception as exc:
-		error_text = str(exc)
-		if any(marker in error_text for marker in ["401", "Invalid Crumb", "Unauthorized"]):
-			await refresh_crumb()
-			crumb_refreshed = True
-		else:
-			raise
-		if crumb_refreshed:
+	history: pd.DataFrame | None = None
+	for attempt in range(2):
+		try:
 			history = _fetch_history()
+			break
+		except Exception as exc:
+			error_text = str(exc)
+			if attempt == 0 and _is_crumb_error(error_text):
+				await refresh_crumb()
+				continue
+			raise
+
+	if history is None:
+		raise ValueError(f"No recent pricing data found for ticker '{symbol}'")
 
 	if history.empty:
 		raise ValueError(f"No recent pricing data found for ticker '{symbol}'")
@@ -238,18 +252,18 @@ async def get_ticker_metadata(ticker: str) -> dict:
 	t1 = normalize_ticker(ticker)
 
 	# Attempt yfinance full info fetch with Tier-1 normalized ticker
-	try:
-		info = yf.Ticker(t1, session=_get_yf_session()).info or {}
-	except Exception as exc:
-		error_text = str(exc)
-		if any(marker in error_text for marker in ["401", "Invalid Crumb", "Unauthorized"]):
-			await refresh_crumb()
-			try:
-				info = yf.Ticker(t1, session=_get_yf_session()).info or {}
-			except Exception:
-				info = {}
-		else:
+	info: dict = {}
+	for attempt in range(2):
+		try:
+			info = yf.Ticker(t1, session=_get_yf_session()).info or {}
+			break
+		except Exception as exc:
+			error_text = str(exc)
+			if attempt == 0 and _is_crumb_error(error_text):
+				await refresh_crumb()
+				continue
 			info = {}
+			break
 
 	if not isinstance(info, dict):
 		info = {}
