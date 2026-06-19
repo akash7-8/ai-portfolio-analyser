@@ -845,60 +845,45 @@ async def _fetch_current_prices_for_tickers(
 
 
 async def _fetch_current_price_with_fallback(ticker: str) -> dict[str, float] | None:
-	"""Fetch current price for ticker using strict Tier-1 candidates only.
+	"""Fetch current price for ticker—quick opportunistic check only.
 
-	Retries with exponential backoff on 401, Invalid Crumb, and 429 errors.
+	Tries candidates concurrently; prefers .NS if both succeed.
+	Any failure routes to Phase 4b (yfinance no longer primary on Render).
 	Tier-2 batch resolution is handled upstream in _fetch_current_prices_for_tickers.
 	"""
 	clean_ticker = ticker.strip().upper()
 	if not clean_ticker:
 		return None
 
-	# Tier-1: prefer .NS for bare tickers
+	# Tier-1: prefer .NS for bare tickers, but try both concurrently for speed
 	if "." in clean_ticker:
 		candidates = [clean_ticker]
 	else:
 		candidates = [f"{clean_ticker}.NS", clean_ticker]
 
-	for candidate in candidates:
-		for attempt in range(3):
-			try:
-				price_df = await get_current_price(candidate)
-				if not price_df.empty and "current_price" in price_df.columns:
-					return {"current_price": float(price_df["current_price"].iloc[-1])}
-				break  # non-retriable failure (empty data)
-			except Exception as exc:
-				error_text = str(exc)
-				is_retriable = any(
-					marker in error_text
-					for marker in [
-						"401",
-						"Invalid Crumb",
-						"429",
-						"Too Many Requests",
-						"Rate limited",
-					]
-				)
-				if is_retriable and attempt < 2:
-					wait_seconds = 2 ** (attempt + 1)
-					logger.warning(
-						"[main] Retriable error for '%s' (attempt %d): %s - retrying in %ds",
-						candidate,
-						attempt + 1,
-						error_text[:80],
-						wait_seconds,
-					)
-					await asyncio.sleep(wait_seconds)
-					continue
-				break  # non-retriable or exhausted retries
+	async def _try_candidate(candidate: str) -> dict[str, float] | None:
+		try:
+			price_df = await get_current_price(candidate)
+			if not price_df.empty and "current_price" in price_df.columns:
+				return {"current_price": float(price_df["current_price"].iloc[-1])}
+		except Exception as exc:
+			logger.debug("[main] Tier-1 failed for '%s': %s", candidate, str(exc)[:100])
+		return None
 
-	# Only reach here if both Tier-1 candidates failed.
-	logger.warning(
-		"[main] All Tier-1 candidates failed for '%s'",
-		clean_ticker,
-	)
-	# Tier-2 is intentionally handled by batch resolver in _fetch_current_prices_for_tickers.
-	return None
+	if len(candidates) == 1:
+		result = await _try_candidate(candidates[0])
+	else:
+		# Fire both .NS and bare concurrently; prefer .NS if both succeed
+		ns_result, bare_result = await asyncio.gather(
+			_try_candidate(candidates[0]),
+			_try_candidate(candidates[1]),
+			return_exceptions=False
+		)
+		result = ns_result if ns_result is not None else bare_result
+
+	if result is None:
+		logger.info("[main] All Tier-1 candidates failed for '%s', routing to Phase 4b", clean_ticker)
+	return result
 
 
 async def _fetch_tier2_web_data(
