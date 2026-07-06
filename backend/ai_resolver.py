@@ -368,6 +368,8 @@ async def scrape_screener_in(ticker: str) -> dict | None:
             try:
                 if "market cap" in label_text:
                     result["market_cap"] = float(value_text)
+                elif "current price" in label_text:
+                    result["current_price"] = float(value_text)
                 elif "p/e" in label_text:
                     result["pe_ratio"] = float(value_text)
                 elif "52w high" in label_text or "high" in label_text:
@@ -376,15 +378,6 @@ async def scrape_screener_in(ticker: str) -> dict | None:
                     result["week_52_low"] = float(value_text)
             except ValueError:
                 continue
-
-        price_candidates = soup.select(".company-ratios .number")
-        if price_candidates:
-            try:
-                result["current_price"] = float(
-                    price_candidates[0].get_text(strip=True).replace(",", "")
-                )
-            except ValueError:
-                pass
 
         sector_el = soup.select_one(".company-links a")
         if sector_el:
