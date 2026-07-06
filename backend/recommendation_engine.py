@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Dict, List, Mapping, Optional
 
 import httpx
@@ -32,6 +33,8 @@ NOISE_DOMAINS = {
 }
 
 _QUERY_STOPWORDS = {"stock", "news", "sector", "india", "outlook", "2026", "usa"}
+_news_cache: dict[str, tuple[float, list[dict]]] = {}
+_NEWS_CACHE_TTL_SECONDS = 4 * 60 * 60  # 4 hours
 
 
 # -- Groq SWOT (primary) -------------------------------------------------------
@@ -156,6 +159,17 @@ async def _fetch_news_snippets(queries: List[str]) -> List[Dict]:
             logger.warning("SearXNG query failed for '%s': %s", query, exc)
             return []
 
+    now = time.time()
+    cached_results: dict[str, list[dict]] = {}
+    uncached_queries: list[str] = []
+    for query in queries:
+        entry = _news_cache.get(query)
+        if entry and (now - entry[0]) < _NEWS_CACHE_TTL_SECONDS:
+            cached_results[query] = entry[1]
+            logger.info("[SWOT news] Cache hit for query: %s", query[:60])
+        else:
+            uncached_queries.append(query)
+
     semaphore = asyncio.Semaphore(2)
 
     async def _limited_search(query: str) -> List[Dict]:
@@ -163,16 +177,23 @@ async def _fetch_news_snippets(queries: List[str]) -> List[Dict]:
             return await _search(query)
 
     search_tasks: list[asyncio.Task[List[Dict]]] = []
-    for index, query in enumerate(queries):
+    for index, query in enumerate(uncached_queries):
         if index > 0:
             await asyncio.sleep(1.0)
         search_tasks.append(asyncio.create_task(_limited_search(query)))
 
-    nested_results = await asyncio.gather(*search_tasks)
-    flat = [snippet for snippets_for_query in nested_results for snippet in snippets_for_query]
+    nested_results = await asyncio.gather(*search_tasks) if search_tasks else []
+    fresh_results: dict[str, list[dict]] = {}
+    for query, result_for_that_query in zip(uncached_queries, nested_results):
+        fresh_results[query] = result_for_that_query
+        _news_cache[query] = (time.time(), result_for_that_query)
+
+    snippets_by_query = {**cached_results, **fresh_results}
+    ordered_results = [snippets_by_query.get(query, []) for query in queries]
+    flat = [snippet for snippets_for_query in ordered_results for snippet in snippets_for_query]
     logger.info("[SWOT news] Raw snippets before filter: %s", [snippet.get("title") for snippet in flat])
     filtered: List[Dict] = []
-    for query, snippets_for_query in zip(queries, nested_results):
+    for query, snippets_for_query in zip(queries, ordered_results):
         for snippet in snippets_for_query:
             if _is_relevant_snippet(snippet, query):
                 filtered.append(snippet)
