@@ -88,19 +88,21 @@ def _build_searxng_queries(
     sector_exposure: Mapping[str, float],
 ) -> List[str]:
     queries: List[str] = []
+    source_filter = (
+        "site:reuters.com OR site:bloomberg.com OR site:moneycontrol.com OR "
+        "site:economictimes.com"
+    )
 
-    top_holdings = sorted(
+    tickers_by_sector: Dict[str, List[str]] = {}
+    for holding in sorted(
         holdings,
         key=lambda h: float(h.get("weight", 0) or 0),
         reverse=True,
-    )[:3]
-    for holding in top_holdings:
+    ):
         ticker = str(holding.get("ticker", "")).strip()
-        if ticker:
-            queries.append(
-                f"{ticker} stock price analysis forecast 2026 site:reuters.com OR "
-                "site:bloomberg.com OR site:moneycontrol.com OR site:economictimes.com"
-            )
+        sector = str(holding.get("sector", "")).strip()
+        if ticker and sector:
+            tickers_by_sector.setdefault(sector, []).append(ticker)
 
     top_sectors = sorted(
         sector_exposure.items(),
@@ -109,7 +111,14 @@ def _build_searxng_queries(
     )[:2]
     for sector, _ in top_sectors:
         if sector:
-            queries.append(f"{sector} sector stocks outlook India 2026")
+            ticker_text = " ".join(tickers_by_sector.get(sector, []))
+            query_parts = [
+                ticker_text,
+                sector,
+                "sector stocks outlook forecast 2026 India",
+            ]
+            query_text = " ".join(part for part in query_parts if part)
+            queries.append(f"{query_text} {source_filter}")
 
     return queries
 
