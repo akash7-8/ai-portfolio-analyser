@@ -349,7 +349,15 @@ async def scrape_screener_in(ticker: str) -> dict | None:
         ) as client:
             resp = await client.get(url)
             if resp.status_code == 404:
-                return None
+                logger.warning("[Screener.in] 404 for %s at %s", clean, url)
+                logger.warning("[Screener.in] 404 for %s, trying consolidated URL", clean)
+                resp2 = await client.get(
+                    f"https://www.screener.in/company/{clean}/consolidated/"
+                )
+                if resp2.status_code == 404:
+                    logger.warning("[Screener.in] Consolidated also 404 for %s", clean)
+                    return None
+                resp = resp2
             resp.raise_for_status()
 
         from bs4 import BeautifulSoup
@@ -389,6 +397,10 @@ async def scrape_screener_in(ticker: str) -> dict | None:
             result["ticker"] = clean
             logger.info("[Screener.in] Fetched data for %s: %s", clean, result)
             return result
+        logger.warning(
+            "[Screener.in] Parsed empty result for %s — page may have changed structure or returned CAPTCHA",
+            clean,
+        )
         return None
 
     except Exception as exc:  # noqa: BLE001 - scraper is best-effort

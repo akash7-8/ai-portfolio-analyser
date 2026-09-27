@@ -910,6 +910,7 @@ async def _fetch_tier2_web_data(
 			return result
 
 	# Indian scraper failed, US finviz failed, or global ticker.
+	logger.info("[Phase4b] Falling through to ai_web_search_price for %s", original_ticker)
 	result = await ai_web_search_price(resolved_ticker)
 	if result and result.get("current_price"):
 		logger.info("[Phase4b] ai_web_search success for %s", original_ticker)
