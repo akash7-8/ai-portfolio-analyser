@@ -42,7 +42,7 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.DEBUG)
 
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 REQUIRED_KEYS = {"normalized_ticker", "exchange", "country", "sector", "asset_class"}
@@ -287,7 +287,7 @@ Rules:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
         "max_tokens": 500,
         "temperature": 0.1,
         "messages": [{"role": "user", "content": prompt}],
@@ -464,7 +464,7 @@ Rules:
             "Content-Type": "application/json",
         }
         payload = {
-            "model": "llama-3.1-8b-instant",
+            "model": "meta-llama/llama-4-scout-17b-16e-instruct",
             "max_tokens": 200,
             "temperature": 0.1,
             "messages": [{"role": "user", "content": prompt}],

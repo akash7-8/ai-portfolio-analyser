@@ -319,7 +319,7 @@ async def _call_groq_swot(prompt: str) -> Dict:
         raise RuntimeError("GROQ_API_KEY not set")
 
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
         "max_tokens": 1000,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.4,
